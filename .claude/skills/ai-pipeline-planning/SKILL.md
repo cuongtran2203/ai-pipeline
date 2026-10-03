@@ -12,6 +12,8 @@ description: Phase 2 of the AI pipeline workflow. Multi-agent debate on model se
    If the critic raised a high-severity issue the judge cannot settle with evidence, run one extra cheap verification task before finalizing (max 1 extra round).
 
 ## Plan requirements
+- Inputs include F0 `ceiling.json` (C0 band). The plan must start build with a **B0 baseline probe** (`"phase": "probe"`, role feasibility-analyst) before any full train task; train tasks depend on it.
+- Mark `"phase": "train"` / `"build"` explicitly (validation is by field, not by task title).
 - Each module: AI model vs classical algorithm, reasoning tied to the customer's resources and data.
 - Include pre/post-processing derived from data analysis.
 - Gates G2 and G3 present; every train task depends on G3.
@@ -19,4 +21,4 @@ description: Phase 2 of the AI pipeline workflow. Multi-agent debate on model se
 - Verify: `python scripts/plan_to_orca.py plan.json --dry-run` succeeds (no cycles).
 
 ## Gate G2
-Present to the human: chosen model per module, deployment method options (ask — it depends on the customer), expected metrics/cost, risks. Record the decision in `decisions.md`, mark `G2` done.
+Present to the human: **target vs estimated ceiling band (C0)** — if target > upper, offer: lower the target / get more or cleaner data / change scope — then chosen model per module, deployment method options (ask — it depends on the customer), expected metrics/cost, risks. Record the decision in `decisions.md`, mark `G2` done.

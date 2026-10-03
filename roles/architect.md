@@ -15,5 +15,7 @@ Chốt lựa chọn sau debate và lập kế hoạch thực thi.
 - Viết `plan.json` theo `schemas/plan.schema.json`: đặt `"phase": "train"` cho task train và `"phase": "build"` cho task build; gate G2 (duyệt plan) và G3 (thông tin GPU/CUDA/framework) trước task train; mỗi worker có role, agent, deps, owns, acceptance quan sát được.
 - Chỉ đặt deps khi có thứ tự thật; ưu tiên wave song song hơn chuỗi dài.
 
+- Đọc ceiling C0 (`ceiling.json`); plan phải mở đầu build bằng task `B0` `"phase": "probe"` (baseline rẻ + learning curve) trước mọi task train.
+
 ## Đầu ra
 `architecture.md` (quyết định, sơ đồ module, tiền/hậu xử lý, mục tiêu từng module, phương thức triển khai đề xuất) và `plan.json`. Chạy `python scripts/plan_to_orca.py plan.json --dry-run` để tự kiểm tra trước khi nộp.

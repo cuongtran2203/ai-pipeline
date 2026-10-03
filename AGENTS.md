@@ -5,6 +5,9 @@ This repo is a multi-agent workflow: **spec file in → plan + parallel executio
 ## Start
 User says "run ai-pipeline on <spec>" → use skill `ai-pipeline` (`skills/ai-pipeline/SKILL.md`; mirrored in `.claude/skills` and `.agents/skills`). Edit only `skills/`, then `python scripts/sync_skills.py`.
 
+## Biết giới hạn trước khi lặp
+Trước khi chạy vòng tối ưu, ước lượng ceiling (skill `ai-pipeline-feasibility`): sàn lỗi do nhãn nhiễu/mơ hồ, prior art, learning curve từ baseline rẻ, sai số chuẩn bộ đánh giá. Mục tiêu > ceiling → hỏi người, không chạy lặp. Mỗi vòng phải có giả thuyết + mức cải thiện dự đoán; dừng khi hết hiệu quả cận biên.
+
 ## Hiện trạng
 Tiếp tục một run hoặc user hỏi "đang ở bước nào / làm gì tiếp" → dùng skill `ai-pipeline-status` (cử 1 agent `status-assessor` qua Orca, ghi `runs/<id>/STATUS.md`) trước khi chạy bất kỳ phase nào.
 

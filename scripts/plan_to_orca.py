@@ -56,7 +56,7 @@ BUILD_ROLES = {"module-dev", "integrator", "error-analyst"}
 
 
 def is_train_task(t):
-    if t.get("phase") == "train":
+    if t.get("phase") in ("train", "probe"):  # probe = cheap baseline training, needs G2+G3 too
         return True
     # explicit `phase` is the contract; only fall back to the task id/role (not free-text titles,
     # which false-positive on e.g. "train/val/test split analysis")

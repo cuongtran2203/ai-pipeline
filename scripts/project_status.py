@@ -90,6 +90,14 @@ def assess(run_dir):
         if not ev["e2e_reports"] and all(os.path.exists(os.path.join(run_dir, k, f)) for f in ("eval.json", "report.md", "report.html")):
             ev["e2e_reports"] = ev["e2e_eval"] = True
 
+    ceil = jload(os.path.join(run_dir, "ceiling.json"), None)
+    ev["ceiling"] = bool(ceil)
+    ceil_block = None
+    if ceil and ceil.get("estimates") and ceil.get("decision") not in ("retarget", "proceed", "stop"):
+        up = ceil["estimates"][-1].get("upper")
+        if up is not None and ceil.get("target") is not None and up < ceil["target"]:
+            ceil_block = (f"Ceiling ({ceil['estimates'][-1].get('checkpoint')}) upper={up} < target={ceil['target']} "
+                          "→ hỏi người: hạ mục tiêu / thêm data / đổi hướng / chấp nhận (ghi decision vào ceiling.json)")
     actions, blocked = [], []
     if not (ev["spec_complete"] and ev["G1"]):
         phase = 0
@@ -136,6 +144,9 @@ def assess(run_dir):
         phase = 6
         actions.append("Hoàn tất. Chỉ cần tổng kết báo cáo cuối cho người dùng.")
 
+    if ceil_block:
+        actions.insert(0, ceil_block)
+        blocked.append("ceiling")
     return {
         "run_dir": run_dir, "phase": phase,
         "phase_name": ["intake", "analysis", "planning", "build", "integration", "optimize", "release"][phase],

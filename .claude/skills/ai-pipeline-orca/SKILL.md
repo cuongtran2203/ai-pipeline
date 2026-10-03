@@ -19,6 +19,13 @@ For each delivery: `question` → answer (or ask the human for gate-type questio
 
 Rules from the Orca guide that matter here: a timeout/empty wait is a checkpoint, not failure; never stop/abandon/retry without positive proof of exit (see `references/recovery-and-cleanup.md`); do not end the turn while `worker-list --terminal-state reclaimable` returns workers.
 
+## Practical notes (from real runs)
+- Orca auto-releases a worker after `worker_done`; still confirm with `worker-list --terminal-state reclaimable` that nothing is left before ending the turn.
+- Map a delivery back to a plan id through `task_map.json` (payload `taskId`), not through dispatch ids; `started.json` stores the real `dispatchId` per task.
+- `--start-ready` skips gates already in `done.json`. `phase: train|probe` needs a dependency path to G2 and G3; `phase: build` to G2.
+- A probe/train/build worker runs in its own worktree; the integrator merges its branch into master; remove merged worktrees afterwards with `orca worktree rm --worktree branch:<name>`.
+- A worker agent not known to Orca (e.g. commandcode) cannot be supervised: use a recognised `--agent`, or drive its terminal manually and confirm by output files.
+
 ## Gates
 `kind: "gate"` tasks are never workers. When `--start-ready` prints `GATE <id> ready`: ask the human, write the answer to `decisions.md`, add the id to `done.json`. Workers that need a human decision mid-task use the `ask` command from their preamble; relay to the human and `reply`.
 

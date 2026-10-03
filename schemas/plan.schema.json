@@ -16,7 +16,7 @@
         "properties": {
           "id": {"type": "string"},
           "kind": {"enum": ["worker", "gate"], "default": "worker"},
-          "phase": {"enum": ["train", "build"], "description": "train: needs a dependency path to gate G3 (and G2); build: needs a path to gate G2"},
+          "phase": {"enum": ["train", "build", "probe"], "description": "probe: cheap baseline for ceiling estimate (C1), treated like train; train: needs a dependency path to gate G3 (and G2); build: needs a path to gate G2"},
           "title": {"type": "string"},
           "role": {"type": "string", "description": "file name (no .md) in roles/"},
           "agent": {"enum": ["claude", "codex"]},

@@ -32,4 +32,6 @@ Use whenever the project already has state (`runs/<run_id>/`) or the user asks f
 | 5 optimize | targets met, else ≤3 rounds (`artifacts/opt-*`) |
 | 6 release | `release/` exists |
 
+`ceiling.json` is also read: `upper < target` without a recorded decision ⇒ blocked on the human.
+
 The script reads files only; the assessor adds Orca runtime state (running/failed tasks) and artifact quality, and its judgment wins on conflict.
