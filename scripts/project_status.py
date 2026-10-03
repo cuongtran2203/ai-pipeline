@@ -66,9 +66,12 @@ def assess(run_dir):
         "proposals": ["proposal.md"], "critique": ["critique.md"], "architecture": ["architecture.md"],
     }.items():
         ev[k] = bool(find(run_dir, *names))
-    plan = find(run_dir, "plan.json")
-    ev["build_plan"] = bool(plan) and any(t.get("kind", "worker") == "worker" and t.get("role") in ("module-dev", "integrator")
-                                          for t in jload(plan, {}).get("tasks", []))
+    # a run may hold a seed plan (run root) and the architect's build plan (artifacts/*/plan.json): use the one with build tasks
+    plans = [p for p in glob.glob(os.path.join(run_dir, "**", "plan.json"), recursive=True)
+             if any(t.get("kind", "worker") == "worker" and t.get("role") in ("module-dev", "integrator")
+                    for t in jload(p, {}).get("tasks", []))]
+    plan = plans[0] if plans else None
+    ev["build_plan"] = bool(plan)
     ev["G2"], ev["G3"] = "G2" in done, "G3" in done
 
     mods = sorted(d for d in glob.glob(os.path.join(run_dir, "modules", "*")) if os.path.isdir(d))
@@ -83,6 +86,9 @@ def assess(run_dir):
     ev["e2e_reports"] = bool(e2e) and all(os.path.exists(os.path.join(os.path.dirname(e2e), f)) for f in ("report.md", "report.html"))
     rounds = len(glob.glob(os.path.join(run_dir, "artifacts", "opt-*")))
     ev["release"] = os.path.isdir(os.path.join(run_dir, "release"))
+    for k in ("modules/error",):  # error-analyst module reports count as e2e reports
+        if not ev["e2e_reports"] and all(os.path.exists(os.path.join(run_dir, k, f)) for f in ("eval.json", "report.md", "report.html")):
+            ev["e2e_reports"] = ev["e2e_eval"] = True
 
     actions, blocked = [], []
     if not (ev["spec_complete"] and ev["G1"]):
