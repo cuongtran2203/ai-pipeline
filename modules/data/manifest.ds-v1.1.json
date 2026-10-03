@@ -1,0 +1,117 @@
+{
+  "content_sha256": "36eec60fa378c4d31c832a9e8ea7d98c10721a55e14ee0253b0cb882f6d2a476",
+  "counts": {
+    "break_min": {
+      "30": 60,
+      "45": 55,
+      "60": 310,
+      "90": 49,
+      "None": 30
+    },
+    "date_parts": {
+      "p0": 477,
+      "p1": 477,
+      "p2": 477
+    },
+    "pages": 100,
+    "rows": 504,
+    "splits": {
+      "test": {
+        "degrade": {
+          "light": 8,
+          "medium": 5,
+          "phone": 16
+        },
+        "hw_crops": 953,
+        "pages": 29,
+        "print_crops": 439,
+        "profile": {
+          "border_touch": 2,
+          "break_under": 2,
+          "ends_apart": 3,
+          "heavy_shift": 2,
+          "merged_cell": 1,
+          "merged_tight": 3,
+          "no_startend_row": 2,
+          "pen_var": 2,
+          "start_middle": 2,
+          "start_right": 2,
+          "tilde_overlap": 2,
+          "tilde_touch": 1,
+          "vshift_pair": 2,
+          "wide_spread": 3
+        },
+        "rows": 142,
+        "whole_date_crops": 137
+      },
+      "train": {
+        "degrade": {
+          "light": 16,
+          "medium": 10,
+          "phone": 31
+        },
+        "hw_crops": 1936,
+        "pages": 57,
+        "print_crops": 883,
+        "profile": {
+          "border_touch": 4,
+          "break_under": 4,
+          "ends_apart": 3,
+          "heavy_shift": 4,
+          "merged_cell": 6,
+          "merged_tight": 4,
+          "no_startend_row": 4,
+          "pen_var": 4,
+          "start_middle": 4,
+          "start_right": 4,
+          "tilde_overlap": 4,
+          "tilde_touch": 5,
+          "vshift_pair": 4,
+          "wide_spread": 3
+        },
+        "rows": 291,
+        "whole_date_crops": 275
+      },
+      "val": {
+        "degrade": {
+          "light": 3,
+          "medium": 3,
+          "phone": 8
+        },
+        "hw_crops": 465,
+        "pages": 14,
+        "print_crops": 212,
+        "profile": {
+          "border_touch": 1,
+          "break_under": 1,
+          "ends_apart": 1,
+          "heavy_shift": 1,
+          "merged_cell": 1,
+          "merged_tight": 1,
+          "no_startend_row": 1,
+          "pen_var": 1,
+          "start_middle": 1,
+          "start_right": 1,
+          "tilde_overlap": 1,
+          "tilde_touch": 1,
+          "vshift_pair": 1,
+          "wide_spread": 1
+        },
+        "rows": 71,
+        "whole_date_crops": 65
+      }
+    },
+    "whole_date_crops": 477
+  },
+  "crop_rule": "date bbox padded left/top/bottom 8px, right <=20px and <half gap to work_code",
+  "dataset_version": "ds-v1.1",
+  "files": 5378,
+  "parent_dataset_version": "ds-v1",
+  "source": "C:\\Users\\24h\\Desktop\\AI_worklflow\\100-sync-hw-v1",
+  "source_kie_sha256": "c0156eb63b801fe21fa06527efe888bd742d73f41754d230ee9ba37a89a91c9c",
+  "source_manifest_sha256": "bd3d51b7f70f402d3c0408dc4140c953fb750fd21142fc8263c9dda09cd9c9ae",
+  "split_sha256": "ed7112f2fe27b56ebbbe25b8b77787b359fff9be6660211b04495df2d291ce2f",
+  "split_version": "split-v1",
+  "synthetic_only": true,
+  "training_labels": "labels/train_*.txt only; val/test excluded from training and vocab"
+}
