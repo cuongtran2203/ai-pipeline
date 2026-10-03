@@ -19,6 +19,7 @@ spec.md ─▶ G1 clarify ─▶ Analysis ×3 ─▶ Debate/Plan ─▶ G2 appro
 | `scripts/validate_spec.py <spec>` | list open questions for G1 |
 | `scripts/plan_to_orca.py plan.json [--dry-run \| --create \| --start-ready]` | DAG → Orca tasks/workers |
 | `scripts/render_report.py eval.json` | Vietnamese `report.md` + clustered-error `report.html` |
+| `scripts/project_status.py [run_dir]` | phase hiện tại + việc cần làm tiếp (skill `ai-pipeline-status`) |
 | `scripts/sync_skills.py [--check]` | `skills/` → `.claude/skills`, `.agents/skills` |
 
 See `AGENTS.md` for rules and `skills/ai-pipeline/SKILL.md` for the phases.

@@ -5,6 +5,9 @@ This repo is a multi-agent workflow: **spec file in → plan + parallel executio
 ## Start
 User says "run ai-pipeline on <spec>" → use skill `ai-pipeline` (`skills/ai-pipeline/SKILL.md`; mirrored in `.claude/skills` and `.agents/skills`). Edit only `skills/`, then `python scripts/sync_skills.py`.
 
+## Hiện trạng
+Tiếp tục một run hoặc user hỏi "đang ở bước nào / làm gì tiếp" → dùng skill `ai-pipeline-status` (cử 1 agent `status-assessor` qua Orca, ghi `runs/<id>/STATUS.md`) trước khi chạy bất kỳ phase nào.
+
 ## Layout
 - `skills/` workflow skills (source of truth) · `roles/` worker role prompts · `schemas/` plan schema
 - `templates/` spec/report templates · `scripts/` validate_spec, plan_to_orca, render_report, sync_skills

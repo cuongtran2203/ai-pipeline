@@ -7,6 +7,8 @@ description: Entry point for the AI-pipeline workflow. Use when the user gives a
 
 Input: a spec file path (see `templates/spec.template.md`). You are the **coordinator**. Workers are Orca-managed agents (claude or codex). Load `ai-pipeline-orca` before launching anything.
 
+**Resuming / "dự án đang ở đâu?"**: if `runs/` already has a run (or the user asks for status), run `ai-pipeline-status` FIRST; it dispatches one assessor agent and tells which phase to execute next. Only then continue.
+
 ## Run directory
 `runs/<run_id>/` (run_id = slug of spec name + date). Keep `spec.md` (copy), `plan.json`, `decisions.md`, `artifacts/<task_id>/`, `modules/<name>/`, `task_map.json`, `done.json`. Workers talk through these files only.
 
