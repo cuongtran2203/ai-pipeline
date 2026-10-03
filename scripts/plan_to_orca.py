@@ -184,7 +184,7 @@ def cmd_str(argv):
 
 
 def run(argv):
-    r = subprocess.run(argv, capture_output=True, text=True)
+    r = subprocess.run(argv, capture_output=True, text=True, encoding="utf-8", errors="replace")
     if r.returncode != 0:
         sys.exit(f"command failed: {cmd_str(argv)}\n{r.stdout}\n{r.stderr}")
     return json.loads(r.stdout) if r.stdout.strip().startswith(("{", "[")) else r.stdout
