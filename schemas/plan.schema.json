@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "AI pipeline task DAG (plan.json)",
+  "type": "object",
+  "required": ["run_id", "title", "tasks"],
+  "properties": {
+    "run_id": {"type": "string"},
+    "title": {"type": "string"},
+    "objective": {"type": "string"},
+    "spec": {"type": "string"},
+    "tasks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "title"],
+        "properties": {
+          "id": {"type": "string"},
+          "kind": {"enum": ["worker", "gate"], "default": "worker"},
+          "phase": {"enum": ["train", "build"], "description": "train: needs a dependency path to gate G3 (and G2); build: needs a path to gate G2"},
+          "title": {"type": "string"},
+          "role": {"type": "string", "description": "file name (no .md) in roles/"},
+          "agent": {"enum": ["claude", "codex"]},
+          "model": {"type": "string"},
+          "effort": {"type": "string"},
+          "worktree": {"type": "string", "default": "current"},
+          "deps": {"type": "array", "items": {"type": "string"}},
+          "target": {"type": "string"},
+          "change": {"type": "string", "description": "required for kind=worker"},
+          "constraints": {"type": "array", "items": {"type": "string"}},
+          "owns": {"type": "array", "items": {"type": "string"}, "description": "paths this worker may edit"},
+          "inputs": {"type": "array", "items": {"type": "string"}},
+          "outputs": {"type": "array", "items": {"type": "string"}},
+          "acceptance": {"type": "string", "description": "required for kind=worker"}
+        }
+      }
+    }
+  }
+}

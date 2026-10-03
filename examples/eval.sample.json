@@ -1,0 +1,30 @@
+{
+  "title": "OCR phiếu chấm công — module REC v0.2",
+  "version": {"model": "rec-v0.2", "dataset": "ds-v3 (real 60 + synth 12k)"},
+  "baseline_name": "rec-v0.1",
+  "overview": {
+    "status": "Mục tiêu ≥95% field-level trên bộ real 60 trang; baseline rec-v0.1 đạt 88%. Nhãn real giới hạn 60 trang.",
+    "method": "Data: 12k synth + 60 real (tỉ lệ 90/10, val real riêng 30). Model khởi tạo từ checkpoint rec-v0.1, thêm augmentation nhiễu in mờ.",
+    "result": "Field-level 92.4% so với 88.0% baseline: tốt hơn, chưa đạt mục tiêu."
+  },
+  "tables": [
+    {"name": "End-to-end theo field", "rows": [
+      {"item": "Ngày", "correct": 58, "total": 60, "baseline_correct": 55},
+      {"item": "Giờ bắt đầu", "correct": 55, "total": 60, "baseline_correct": 52},
+      {"item": "Mã NV", "correct": 54, "total": 60, "baseline_correct": 53}
+    ]}
+  ],
+  "errors": [
+    {"cluster": "Nhầm 0/O, 1/l ở mã NV", "count": 6, "cause": "Giả thuyết: synth thiếu font in kim.",
+     "examples": [{"where": "trang 12, dòng 3", "note": "O đọc thành 0"}]},
+    {"cluster": "Giờ nghỉ bị cắt nét", "count": 5, "cause": "Đã xác nhận: crop layout quá sát.",
+     "examples": [{"where": "trang 31, dòng 7"}]}
+  ],
+  "conclusion": {
+    "fixes": [
+      {"error": "Nhầm 0/O", "fix": "Thêm font dot-matrix vào synth + hậu xử lý theo regex mã NV", "priority": "P1", "measure": "Mã NV ≥ 58/60 trên val real"},
+      {"error": "Giờ nghỉ bị cắt", "fix": "Nới padding crop 4px", "priority": "P2", "measure": "Giờ nghỉ ≥ 57/60"}
+    ],
+    "recommend": "Chưa nên thay checkpoint production; giữ rec-v0.1 cho tới khi Mã NV ≥ 96%."
+  }
+}
