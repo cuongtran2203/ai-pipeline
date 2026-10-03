@@ -167,6 +167,7 @@ def build_spec(plan, t, run_dir):
             "all dataset/model artifacts must carry a version tag",
             "reports for the user are written in Vietnamese",
             "ask the coordinator (orca orchestration ask) instead of guessing when blocked on a human decision",
+            f"log each experiment/finding to the problem notebook: python scripts/notebook.py log {run_dir} --type experiment|research|error|insight --title ... --body ... --author {role} (hypothesis, setup, metrics, conclusion; see skills/ai-pipeline-notebook)",
         ]),
         "Ownership: you may edit only " + ", ".join(t.get("owns", [f"{run_dir}/artifacts/{t['id']}/"])),
         "Inputs: " + (", ".join(t.get("inputs", [])) or "none"),

@@ -34,4 +34,6 @@ Use whenever the project already has state (`runs/<run_id>/`) or the user asks f
 
 `ceiling.json` is also read: `upper < target` without a recorded decision ⇒ blocked on the human.
 
+The assessor also reports notebook state (`notebook/journal.jsonl` entry count, last `export`, whether `notebook_url` is set) and whether insights were written for the finished phases.
+
 The script reads files only; the assessor adds Orca runtime state (running/failed tasks) and artifact quality, and its judgment wins on conflict.

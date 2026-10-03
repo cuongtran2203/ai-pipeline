@@ -9,6 +9,9 @@ Input: a spec file path (see `templates/spec.template.md`). You are the **coordi
 
 **Resuming / "dự án đang ở đâu?"**: if `runs/` already has a run (or the user asks for status), run `ai-pipeline-status` FIRST; it dispatches one assessor agent and tells which phase to execute next. Only then continue.
 
+## Notebook
+At run start `python scripts/notebook.py init runs/<id> --title "<problem>"`. Workers log experiments; you log a `decision` per gate and 3–5 `insight` entries at the end of every phase; after each phase `notebook.py export` and ask the human to refresh the NotebookLM source (optional). See `ai-pipeline-notebook`.
+
 ## Run directory
 `runs/<run_id>/` (run_id = slug of spec name + date). Keep `spec.md` (copy), `plan.json`, `decisions.md`, `artifacts/<task_id>/`, `modules/<name>/`, `task_map.json`, `done.json`. Workers talk through these files only.
 

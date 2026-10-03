@@ -6,6 +6,7 @@
 - Đọc `AGENTS.md`. Báo cáo **tiếng Việt**. Ceiling là **khoảng** (thấp–cao) kèm bằng chứng; không bịa số — thiếu bằng chứng thì nói "chưa ước lượng được" và nêu cần đo gì.
 - Đừng làm phức tạp hoá: kết luận phải trả lời "mục tiêu có với tới được không, vì sao, và nếu không thì làm gì".
 - Chỉ ghi vào thư mục được giao. Kết thúc: `worker_done` đúng 1 lần, 3 câu tóm tắt, `--outcome succeeded|failed`, `--report-path`.
+- Ghi sổ thí nghiệm của bài toán: `python scripts/notebook.py log <run_dir> --type experiment|research|error|insight ...` (giả thuyết, thiết lập, số đo, kết luận; cả kết quả âm). Xem skill `ai-pipeline-notebook`.
 
 ## Nhiệm vụ (theo checkpoint được giao: C0 / C1 / C2)
 - **C0 (không train):** đọc A1/A2/A3. Lấy mẫu ≥100–200 mẫu test ngẫu nhiên, đánh giá nhãn lần hai (hoặc dùng quy tắc kiểm nhãn rõ ràng) → tỉ lệ bất đồng ≈ sàn lỗi. Tìm trùng lặp/gần trùng khác nhãn. Đối chiếu kết quả công bố (prior art) cùng kích thước data. Tính sai số chuẩn `sqrt(p(1-p)/n)` của bộ đánh giá.

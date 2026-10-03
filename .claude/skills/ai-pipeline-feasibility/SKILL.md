@@ -31,6 +31,8 @@ The ceiling is a **range** (lower–upper), never a point, and it is only as goo
 - Never start a round without a written hypothesis + predicted gain + how it is measured. A round that cannot name its mechanism is not allowed (keep it simple: data → pre/post-processing → training recipe → bigger model, in that order).
 - Predicted vs measured gain off by >2× twice ⇒ the error model is wrong: pause and re-diagnose (error analysis), do not repeat the same kind of round.
 
+Log every checkpoint (C0–C3) and round to the notebook (`experiment`/`insight`) and read prior entries before proposing a round.
+
 ## `ceiling.json`
 ```json
 {"metric":"accuracy","target":0.99,

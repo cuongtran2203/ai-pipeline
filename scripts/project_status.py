@@ -90,6 +90,12 @@ def assess(run_dir):
         if not ev["e2e_reports"] and all(os.path.exists(os.path.join(run_dir, k, f)) for f in ("eval.json", "report.md", "report.html")):
             ev["e2e_reports"] = ev["e2e_eval"] = True
 
+    nb_dir = os.path.join(run_dir, "notebook")
+    nb = jload(os.path.join(nb_dir, "notebooklm.json"), {})
+    jl = os.path.join(nb_dir, "journal.jsonl")
+    ev["notebook"] = {"exists": os.path.isdir(nb_dir),
+                      "entries": sum(1 for _ in open(jl, encoding="utf-8")) if os.path.exists(jl) else 0,
+                      "notebooklm_url_set": bool(nb.get("notebook_url")), "last_export": nb.get("last_export") or None}
     ceil = jload(os.path.join(run_dir, "ceiling.json"), None)
     ev["ceiling"] = bool(ceil)
     ceil_block = None
@@ -147,6 +153,8 @@ def assess(run_dir):
     if ceil_block:
         actions.insert(0, ceil_block)
         blocked.append("ceiling")
+    if not ev["notebook"]["exists"]:
+        actions.append("Chưa có sổ thí nghiệm: python scripts/notebook.py init " + run_dir)
     return {
         "run_dir": run_dir, "phase": phase,
         "phase_name": ["intake", "analysis", "planning", "build", "integration", "optimize", "release"][phase],

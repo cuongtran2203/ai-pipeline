@@ -5,6 +5,9 @@ This repo is a multi-agent workflow: **spec file in → plan + parallel executio
 ## Start
 User says "run ai-pipeline on <spec>" → use skill `ai-pipeline` (`skills/ai-pipeline/SKILL.md`; mirrored in `.claude/skills` and `.agents/skills`). Edit only `skills/`, then `python scripts/sync_skills.py`.
 
+## Sổ thí nghiệm (mỗi bài toán một notebook)
+Ghi mọi thí nghiệm, quyết định, đúc kết vào `runs/<id>/notebook/` bằng `scripts/notebook.py` (skill `ai-pipeline-notebook`), kể cả kết quả âm; đọc sổ trước khi đề xuất vòng mới. NotebookLM (skill `notebooklm` của bên thứ ba) là tuỳ chọn cho research và kho tri thức: người tự tạo notebook/upload nguồn, chỉ upload nội dung không bí mật, không tự đăng nhập Google thay người dùng.
+
 ## Biết giới hạn trước khi lặp
 Trước khi chạy vòng tối ưu, ước lượng ceiling (skill `ai-pipeline-feasibility`): sàn lỗi do nhãn nhiễu/mơ hồ, prior art, learning curve từ baseline rẻ, sai số chuẩn bộ đánh giá. Mục tiêu > ceiling → hỏi người, không chạy lặp. Mỗi vòng phải có giả thuyết + mức cải thiện dự đoán; dừng khi hết hiệu quả cận biên.
 

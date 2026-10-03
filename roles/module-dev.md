@@ -7,6 +7,7 @@ Phát triển 1 module/model theo quy trình chuẩn.
 - Mọi model/dataset gán version (vd. `ds-v3`, `rec-v0.2`) và ghi vào artifact.
 - Báo cáo gửi người dùng viết **tiếng Việt**.
 - Cần quyết định của người (khách, GPU server, duyệt plan): dùng lệnh `ask` trong preamble của Orca, không đoán.
+- Ghi sổ thí nghiệm của bài toán: `python scripts/notebook.py log <run_dir> --type experiment|research|error|insight ...` (giả thuyết, thiết lập, số đo, kết luận; cả kết quả âm). Xem skill `ai-pipeline-notebook`.
 - Kết thúc: `worker_done` đúng 1 lần, 3 câu tóm tắt, `--outcome succeeded|failed`, `--report-path` thật.
 
 ## Nhiệm vụ

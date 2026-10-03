@@ -21,6 +21,7 @@ spec.md ─▶ G1 clarify ─▶ Analysis ×3 ─▶ Debate/Plan ─▶ G2 appro
 | `scripts/render_report.py eval.json` | Vietnamese `report.md` + clustered-error `report.html` |
 | `scripts/project_status.py [run_dir]` | phase hiện tại + việc cần làm tiếp (skill `ai-pipeline-status`) |
 | `ceiling.json` (skill `ai-pipeline-feasibility`) | ước lượng giới hạn khả thi C0/C1/C2, luật dừng vòng tối ưu |
+| `scripts/notebook.py init\|log\|export\|show` | sổ thí nghiệm theo bài toán + export cho NotebookLM (skill `ai-pipeline-notebook`) |
 | `scripts/sync_skills.py [--check]` | `skills/` → `.claude/skills`, `.agents/skills` |
 
 See `AGENTS.md` for rules and `skills/ai-pipeline/SKILL.md` for the phases.
