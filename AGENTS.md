@@ -36,3 +36,4 @@ Hầu hết vấn đề khi làm model/pipeline AI quy về 2 câu hỏi. Trả 
 4. After every evaluation write `report.md` (Vietnamese; Tổng quan / Nội dung chi tiết / Kết luận) and `report.html` (clustered errors) via `scripts/render_report.py`.
 5. All user-facing text in Vietnamese.
 6. Parallel development tasks each get their own git worktree/branch (`worktree: new-child`); never let two workers edit the same checkout. Share artifacts/reports via the absolute run dir; integrator merges branches.
+7. **Sandbox** (`ai-pipeline-sandbox`): mọi việc triển khai/kiểm thử/benchmark/huấn luyện chạy trong 1 sandbox container trên server (hoặc local nếu human cho phép rõ); không tự ý cài thư viện, cần gói nào thì `ask` trước và chỉ cài trong container.
