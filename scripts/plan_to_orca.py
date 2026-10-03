@@ -58,8 +58,9 @@ BUILD_ROLES = {"module-dev", "integrator", "error-analyst"}
 def is_train_task(t):
     if t.get("phase") == "train":
         return True
-    hay = " ".join([t.get("id", ""), t.get("title", ""), t.get("role", "")]).lower()
-    return "train" in hay
+    # explicit `phase` is the contract; only fall back to the task id/role (not free-text titles,
+    # which false-positive on e.g. "train/val/test split analysis")
+    return any(w in t.get("id", "").lower() for w in ("train",)) or t.get("role") == "trainer"
 
 
 def is_build_task(t):
@@ -299,6 +300,10 @@ def main():
             print("nothing ready (mark finished tasks/gates in done.json)")
             return
         for t in todo:
+            if t.get("kind", "worker") == "gate" and t["id"] in done:
+                started[t["id"]] = True  # gate already answered: nothing to ask
+                save_started()
+                continue
             if t.get("kind", "worker") == "gate":
                 print(f"GATE {t['id']} ready — ask the human: {t['title']}  (then add '{t['id']}' to done.json)")
                 started[t["id"]] = True
@@ -310,9 +315,9 @@ def main():
             if isinstance(receipt, dict) and receipt.get("ok") is False:
                 sys.exit(f"worker start failed for {t['id']}: {json.dumps(receipt, ensure_ascii=False)}")
             detail = receipt.get("result", {}) if isinstance(receipt, dict) else {}
-            if isinstance(detail, dict) and ("failedStage" in detail or "residualResources" in detail):
+            if isinstance(detail, dict) and (detail.get("failedStage") or detail.get("residualResources")):
                 sys.exit(f"worker start reported failure for {t['id']}: {json.dumps(detail, ensure_ascii=False)}")
-            started[t["id"]] = find_id(receipt) or True  # dispatch id for retry checks
+            started[t["id"]] = (detail.get("dispatchId") if isinstance(detail, dict) else None) or find_id(receipt) or True  # dispatch id for retry checks
             save_started()  # persist after EACH receipt so a retry never double-starts a worker
             print(f"started {t['id']} ({t.get('agent', a.agent)})")
         return
