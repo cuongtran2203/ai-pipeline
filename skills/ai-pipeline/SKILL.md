@@ -37,3 +37,4 @@ At run start `python scripts/notebook.py init runs/<id> --title "<problem>"`. Wo
 - User-facing text in Vietnamese.
 - Know the ceiling before burning rounds (`ai-pipeline-feasibility`).
 - Never skip G1/G2/G3; never train without G3 information.
+- Sandbox (`ai-pipeline-sandbox`): all execution/testing in a container on the server (local only if the human allows); never install libraries without permission. At G2/G3 ask: container/server, local allowed?, which libraries are allowed.

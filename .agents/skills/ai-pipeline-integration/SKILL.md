@@ -5,6 +5,8 @@ description: Phases 4-6 of the AI pipeline workflow. Integrate modules, test end
 
 # Integration, optimization, release
 
+All e2e runs, tests, benchmarks and packaging happen inside the sandbox container (`ai-pipeline-sandbox`); no library installs without the human's permission.
+
 1. `I1` integrator: assemble modules + pre/post-processing; e2e eval on real val; measure each module and each end-to-end field against baseline.
 2. `I2` error-analyst: cluster errors, confirm causes, produce `eval.json` → reports.
 3. **Optimize loop** (≤3 rounds by default; stop rules and the hypothesis/predicted-gain requirement come from `ai-pipeline-feasibility`, checkpoint C2): per top error cluster create a task (role module-dev or integrator) with hypothesis + measurement; run clusters in parallel when owned directories are disjoint; re-run I1/I2; stop when requirements.md targets are met or rounds are exhausted, then report honestly.
