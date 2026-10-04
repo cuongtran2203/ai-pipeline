@@ -12,6 +12,9 @@ description: Mandatory execution rule for the AI pipeline - every deployment, te
 4. Không động tới container/tiến trình không phải của mình; không `--privileged`, `--net=host`, `docker system prune`.
 5. Cho phép trên host: đọc file, phân tích tĩnh, chạy các script **đã có sẵn** bằng thư viện **đã có sẵn** chỉ khi người đã cho phép chạy local (ghi vào `decisions.md`). Không có phép → ask.
 
+## Bẫy đã gặp (Paddle)
+`paddle2onnx` mặc định chạy optimizer Polygraphy và tự `pip install onnx_graphsurgeon` (kéo theo đổi numpy) — luôn export với `--optimize_tool None`; sau mỗi export so `pip freeze` với baseline `requirements.lock`; lệch ⇒ báo `--type error`, gỡ đúng gói lệch trong container của mình.
+
 ## Quy trình
 1. Đầu task: kiểm tra `decisions.md` có (a) thông tin server/container (G3), (b) phép chạy local (nếu cần), (c) danh sách gói được phép. Thiếu → `ask`, không đoán và không "tạm cài".
 2. Dựng/dùng container, mount thư mục module + dữ liệu chỉ đọc; chạy lệnh qua `docker exec`; log image tag, lệnh, kết quả vào sổ (`notebook.py log`).
