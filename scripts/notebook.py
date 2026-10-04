@@ -84,6 +84,166 @@ def cmd_init(a):
     print("notebook ready:", d)
 
 
+import re
+
+
+def slug(s, n=48):
+    s = re.sub(r"[^\w\- ]+", "", s, flags=re.U).strip().replace(" ", "-")
+    return (s[:n] or "entry").strip("-").lower()
+
+
+def sync_to_kg(run_dir, e, kg_edges_arg=None):
+    try:
+        kd = os.path.join(os.path.abspath(run_dir), "knowledge")
+        os.makedirs(kd, exist_ok=True)
+        ep = os.path.join(kd, "entities.jsonl")
+        edp = os.path.join(kd, "edges.jsonl")
+
+        type_map = {
+            "decision": "Decision",
+            "gate": "Decision",
+            "experiment": "Experiment",
+            "research": "Experiment",
+            "insight": "Experiment",
+            "error": "Incident",
+        }
+        kg_type = type_map.get(e["type"], "Experiment")
+        prefix_map = {
+            "Decision": "decision",
+            "Experiment": "exp",
+            "Incident": "incident",
+        }
+        prefix = prefix_map.get(kg_type, "node")
+        eid = f"{prefix}:{slug(e['title'])}"
+
+        # 1. Append entity
+        ent_record = {
+            "id": eid,
+            "type": kg_type,
+            "title": e["title"],
+            "body": e["body"],
+            "properties": {
+                "author": e.get("author"),
+                "tags": e.get("tags", []),
+                "metrics": e.get("metrics", {}),
+                "refs": e.get("refs", []),
+            },
+            "created_at": e["ts"],
+        }
+        with open(ep, "a", encoding="utf-8") as f:
+            f.write(json.dumps(ent_record, ensure_ascii=False) + "\n")
+
+        # 2. Author person entity
+        author = e.get("author") or "agent"
+        author_id = f"person:{slug(author)}"
+        author_record = {
+            "id": author_id,
+            "type": "Person",
+            "title": author,
+            "body": "",
+            "properties": {"alias": author},
+            "created_at": e["ts"],
+        }
+        with open(ep, "a", encoding="utf-8") as f:
+            f.write(json.dumps(author_record, ensure_ascii=False) + "\n")
+
+        # 3. Automatic edges
+        edges_to_write = []
+        if kg_type == "Decision":
+            edges_to_write.append({
+                "source": eid,
+                "target": author_id,
+                "type": "decided_by",
+                "valid_from": e["ts"],
+                "valid_to": None,
+                "recorded_at": e["ts"],
+                "source_ref": f"notebook:{e['ts']}",
+                "confidence": 1.0,
+            })
+
+        # Parse refs for artifacts / datasets / models
+        for r in e.get("refs", []):
+            clean_r = r.strip()
+            if not clean_r:
+                continue
+            r_slug = slug(os.path.basename(clean_r))
+            art_id = f"artifact:{r_slug}"
+            with open(ep, "a", encoding="utf-8") as f:
+                f.write(json.dumps({
+                    "id": art_id,
+                    "type": "Artifact",
+                    "title": os.path.basename(clean_r),
+                    "body": f"Referenced at {clean_r}",
+                    "properties": {"path": clean_r},
+                    "created_at": e["ts"],
+                }, ensure_ascii=False) + "\n")
+
+            if kg_type == "Experiment":
+                edges_to_write.append({
+                    "source": eid,
+                    "target": art_id,
+                    "type": "evaluated_on",
+                    "valid_from": e["ts"],
+                    "valid_to": None,
+                    "recorded_at": e["ts"],
+                    "source_ref": clean_r,
+                    "confidence": 1.0,
+                })
+            elif kg_type == "Decision":
+                edges_to_write.append({
+                    "source": eid,
+                    "target": art_id,
+                    "type": "evidenced_by",
+                    "valid_from": e["ts"],
+                    "valid_to": None,
+                    "recorded_at": e["ts"],
+                    "source_ref": clean_r,
+                    "confidence": 1.0,
+                })
+
+        # 4. Explicit --kg-edges
+        if kg_edges_arg:
+            for item in kg_edges_arg.split(","):
+                item = item.strip()
+                if not item or ":" not in item:
+                    continue
+                etype, tgt = item.split(":", 1)
+                etype = etype.strip()
+                tgt = tgt.strip()
+                edges_to_write.append({
+                    "source": eid,
+                    "target": tgt,
+                    "type": etype,
+                    "valid_from": e["ts"],
+                    "valid_to": None,
+                    "recorded_at": e["ts"],
+                    "source_ref": f"notebook:{e['ts']}",
+                    "confidence": 1.0,
+                })
+
+        # Deduplicate edges before writing
+        seen_edges = set()
+        if os.path.exists(edp):
+            with open(edp, encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if line:
+                        try:
+                            re = json.loads(line)
+                            seen_edges.add((re.get("source"), re.get("target"), re.get("type")))
+                        except ValueError:
+                            pass
+
+        with open(edp, "a", encoding="utf-8") as f:
+            for ed in edges_to_write:
+                key = (ed["source"], ed["target"], ed["type"])
+                if key not in seen_edges:
+                    seen_edges.add(key)
+                    f.write(json.dumps(ed, ensure_ascii=False) + "\n")
+    except Exception as ex:
+        print(f"Warning: KG sync skipped ({ex})", file=sys.stderr)
+
+
 def cmd_log(a):
     if not os.path.isdir(nb_dir(a.run_dir)):
         cmd_init(argparse.Namespace(run_dir=a.run_dir, title=None))
@@ -97,6 +257,8 @@ def cmd_log(a):
     with open(os.path.join(nb_dir(a.run_dir), "journal.jsonl"), "a", encoding="utf-8") as f:
         f.write(json.dumps(e, ensure_ascii=False) + "\n")
     rebuild(a.run_dir)
+    if not getattr(a, "no_kg", False):
+        sync_to_kg(a.run_dir, e, getattr(a, "kg_edges", None))
     print(f"logged [{a.type}] {a.title}")
 
 
@@ -141,6 +303,8 @@ def main():
             p.add_argument("--metrics")
             p.add_argument("--refs")
             p.add_argument("--author")
+            p.add_argument("--kg-edges", help="Comma-separated typed edges (e.g. supersedes:decision:G1,evidenced_by:exp:B0)")
+            p.add_argument("--no-kg", action="store_true", help="Disable automatic KG entity/edge generation")
         if n == "show":
             p.add_argument("--type", choices=TYPES)
             p.add_argument("--last", type=int, default=20)

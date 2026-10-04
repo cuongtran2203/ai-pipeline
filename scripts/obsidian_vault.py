@@ -16,6 +16,7 @@ checkpoints, notebook/export copies, graphify-out and virtualenvs. Safe to rerun
 `.vault-generated` marker is ever deleted.
 """
 import argparse
+import collections
 import glob
 import json
 import os
@@ -77,28 +78,185 @@ def build_run(run_dir, out_docs, known):
             e["_name"], e["_link"] = name, f"{rel_run}/notebook/entries/{name}"
             entries.append(e)
             known.add(e["_link"])
+    # 2. Knowledge Graph (entities.jsonl and edges.jsonl)
+    kg_ent_path = os.path.join(run_dir, "knowledge", "entities.jsonl")
+    kg_edge_path = os.path.join(run_dir, "knowledge", "edges.jsonl")
+    kg_entities = {}
+    kg_edges = []
+    if os.path.exists(kg_ent_path):
+        for line in open(kg_ent_path, encoding="utf-8"):
+            line = line.strip()
+            if line:
+                try:
+                    obj = json.loads(line)
+                    if obj.get("id"):
+                        kg_entities[obj["id"]] = obj
+                except ValueError:
+                    pass
+    if os.path.exists(kg_edge_path):
+        for line in open(kg_edge_path, encoding="utf-8"):
+            line = line.strip()
+            if line:
+                try:
+                    kg_edges.append(json.loads(line))
+                except ValueError:
+                    pass
+
+    # Map entity id to vault note link
+    ent_links = {}
+    ent_dir = os.path.join(out_docs, rel_run, "knowledge", "entities")
+    if kg_entities:
+        os.makedirs(ent_dir, exist_ok=True)
+        for eid, ent in kg_entities.items():
+            eslug = re.sub(r"[^\w\-]+", "-", eid).strip("-").lower()
+            elink = f"{rel_run}/knowledge/entities/{eslug}"
+            ent_links[eid] = elink
+            known.add(elink)
+
+    # Render dedicated notes for KG entities
+    for eid, ent in kg_entities.items():
+        elink = ent_links[eid]
+        eslug = os.path.basename(elink)
+        out_edges = [ed for ed in kg_edges if ed.get("source") == eid]
+        in_edges = [ed for ed in kg_edges if ed.get("target") == eid]
+
+        fm_relations = []
+        for ed in out_edges:
+            tgt_link = ent_links.get(ed["target"], ed["target"])
+            fm_relations.append(f"  - type: {ed['type']}\n    target: \"[[{tgt_link}]]\"")
+
+        fm = [
+            "---",
+            f"id: \"{eid}\"",
+            f"type: {ent.get('type')}",
+            f"title: \"{ent.get('title', eid)}\"",
+            f"created_at: \"{ent.get('created_at', '')}\"",
+        ]
+        if fm_relations:
+            fm += ["relations:", *fm_relations]
+        fm += ["---", "", f"# [{ent.get('type')}] {ent.get('title', eid)}", ""]
+
+        if ent.get("body"):
+            fm += [ent["body"].strip(), ""]
+
+        if ent.get("properties"):
+            fm += ["### Thuộc tính", f"```json\n{json.dumps(ent['properties'], ensure_ascii=False, indent=2)}\n```", ""]
+
+        if out_edges:
+            fm += ["### Quan hệ có kiểu (Typed Outgoing Edges)", ""]
+            for ed in out_edges:
+                tgt_ent = kg_entities.get(ed["target"], {"title": ed["target"]})
+                tlink = ent_links.get(ed["target"], ed["target"])
+                time_info = f" *(valid: {ed.get('valid_from') or '-'}..{ed.get('valid_to') or 'active'})*"
+                fm.append(f"- **{ed['type']}** ➔ [[{tlink}|{tgt_ent.get('title')}]] ({ed['target']}){time_info}")
+            fm.append("")
+
+        if in_edges:
+            fm += ["### Được liên kết bởi (Typed Incoming Edges)", ""]
+            for ed in in_edges:
+                src_ent = kg_entities.get(ed["source"], {"title": ed["source"]})
+                slink = ent_links.get(ed["source"], ed["source"])
+                time_info = f" *(valid: {ed.get('valid_from') or '-'}..{ed.get('valid_to') or 'active'})*"
+                fm.append(f"- **{ed['type']}** 🠔 [[{slink}|{src_ent.get('title')}]] ({ed['source']}){time_info}")
+            fm.append("")
+
+        open(os.path.join(ent_dir, f"{eslug}.md"), "w", encoding="utf-8").write("\n".join(fm))
+
+    # Render entries with typed edges if matched
     ed = os.path.join(out_docs, rel_run, "notebook", "entries")
     os.makedirs(ed, exist_ok=True)
     for i, e in enumerate(entries):
         tags = sorted({e["type"], *e.get("tags", [])})
         fm = ["---", f"type: {e['type']}", f"author: {e.get('author', '-')}", f"date: \"{e['ts']}\"",
-              "tags: [" + ", ".join(t.replace(" ", "-") for t in tags) + "]", "---", "", f"# {e['title']}", "", e["body"].strip(), ""]
+              "tags: [" + ", ".join(t.replace(" ", "-") for t in tags) + "]"]
+
+        # Check for related KG edges
+        entry_title_slug = slug(e["title"])
+        matching_eids = [eid for eid in kg_entities if entry_title_slug in eid.lower()]
+        related_edges = [ed for ed in kg_edges if any(ed.get("source") == m for m in matching_eids)]
+
+        if related_edges:
+            fm.append("relations:")
+            for re_ed in related_edges:
+                tlink = ent_links.get(re_ed["target"], re_ed["target"])
+                fm.append(f"  - type: {re_ed['type']}\n    target: \"[[{tlink}]]\"")
+
+        fm += ["---", "", f"# {e['title']}", "", e["body"].strip(), ""]
         if e.get("metrics"):
             fm += ["Metrics: " + ", ".join(f"`{k}`={v}" for k, v in e["metrics"].items()), ""]
         if e.get("refs"):
             fm += ["Refs: " + ", ".join(wikilink(r, known) for r in e["refs"]), ""]
+
+        if related_edges:
+            fm += ["", "### Quan hệ đồ thị tri thức (Typed Edges)", ""]
+            for re_ed in related_edges:
+                tgt_ent = kg_entities.get(re_ed["target"], {"title": re_ed["target"]})
+                tlink = ent_links.get(re_ed["target"], re_ed["target"])
+                time_str = f" *(valid: {re_ed.get('valid_from') or '-'}..{re_ed.get('valid_to') or 'active'})*"
+                fm.append(f"- **{re_ed['type']}**: [[{tlink}|{tgt_ent.get('title')}]] ({re_ed['target']}){time_str}")
+
         nav = []
         if i > 0:
             nav.append("← " + f"[[{entries[i - 1]['_link']}]]")
         if i + 1 < len(entries):
             nav.append(f"[[{entries[i + 1]['_link']}]] →")
         if nav:
-            fm += [" · ".join(nav), ""]
+            fm += ["", " · ".join(nav), ""]
         open(os.path.join(ed, e["_name"] + ".md"), "w", encoding="utf-8").write("\n".join(fm))
+
+    # Render dedicated Knowledge Graph summary page
+    if kg_entities:
+        kg_overview_link = f"{rel_run}/knowledge/KNOWLEDGE_GRAPH"
+        known.add(kg_overview_link)
+        kg_md = [
+            f"# Đồ thị tri thức có kiểu (Typed Knowledge Graph): {rid}",
+            "",
+            f"Tổng số: **{len(kg_entities)}** thực thể (entities), **{len(kg_edges)}** cạnh có kiểu (typed edges).",
+            "",
+            "## Danh mục thực thể theo phân loại",
+            "",
+        ]
+        by_type = collections.defaultdict(list)
+        for eid, ent in kg_entities.items():
+            by_type[ent.get("type")].append(ent)
+        for kgt in ("Decision", "Incident", "Experiment", "Artifact", "Policy", "Task", "Person", "Run"):
+            if kgt in by_type:
+                kg_md.append(f"### {kgt} ({len(by_type[kgt])})")
+                for ent in by_type[kgt]:
+                    tlink = ent_links.get(ent["id"], ent["id"])
+                    kg_md.append(f"- [[{tlink}|{ent.get('title')}]] (`{ent['id']}`)")
+                kg_md.append("")
+
+        kg_md += ["## Cạnh có kiểu (Typed Relations)", ""]
+        by_edge_type = collections.defaultdict(list)
+        for ed in kg_edges:
+            by_edge_type[ed["type"]].append(ed)
+        for et in ("supersedes", "caused", "decided_by", "approved_by", "evidenced_by", "evaluated_on", "uses", "depends_on"):
+            if et in by_edge_type:
+                kg_md.append(f"### {et} ({len(by_edge_type[et])})")
+                for ed in by_edge_type[et]:
+                    slink = ent_links.get(ed["source"], ed["source"])
+                    tlink = ent_links.get(ed["target"], ed["target"])
+                    sent = kg_entities.get(ed["source"], {"title": ed["source"]})
+                    tent = kg_entities.get(ed["target"], {"title": ed["target"]})
+                    time_str = f" *(valid: {ed.get('valid_from') or '-'}..{ed.get('valid_to') or 'active'})*"
+                    kg_md.append(f"- [[{slink}|{sent.get('title')}]] ➔ **{et}** ➔ [[{tlink}|{tent.get('title')}]]{time_str}")
+                kg_md.append("")
+
+        open(os.path.join(out_docs, rel_run, "knowledge", "KNOWLEDGE_GRAPH.md"), "w", encoding="utf-8").write("\n".join(kg_md))
+
     groups = {}
     for e in entries:
         groups.setdefault(e["type"], []).append(e)
     moc = [f"# Bản đồ nội dung: {rid}", ""]
+
+    if kg_entities:
+        moc += [
+            "## Đồ thị tri thức (Knowledge Graph)",
+            f"- [[{rel_run}/knowledge/KNOWLEDGE_GRAPH|Tổng quan Knowledge Graph]] ({len(kg_entities)} thực thể, {len(kg_edges)} cạnh có kiểu)",
+            "",
+        ]
+
     for t, title in (("decision", "Quyết định"), ("insight", "Đúc kết"), ("experiment", "Thí nghiệm"),
                      ("error", "Lỗi / phân tích lỗi"), ("research", "Research"), ("gate", "Gate")):
         if t in groups:

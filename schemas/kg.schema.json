@@ -1,0 +1,124 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Typed Knowledge Graph Schema",
+  "description": "Schema for entities and edges in the typed knowledge graph layer (runs/<id>/knowledge/entities.jsonl and edges.jsonl).",
+  "type": "object",
+  "properties": {
+    "entities": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/entity"
+      }
+    },
+    "edges": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/edge"
+      }
+    }
+  },
+  "$defs": {
+    "node_type": {
+      "type": "string",
+      "enum": [
+        "Run",
+        "Task",
+        "Decision",
+        "Experiment",
+        "Artifact",
+        "Incident",
+        "Person",
+        "Policy"
+      ]
+    },
+    "edge_type": {
+      "type": "string",
+      "enum": [
+        "depends_on",
+        "uses",
+        "evaluated_on",
+        "decided_by",
+        "approved_by",
+        "supersedes",
+        "caused",
+        "evidenced_by"
+      ]
+    },
+    "entity": {
+      "type": "object",
+      "required": ["id", "type", "title"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Stable unique entity identifier (e.g. run:timesheet-ocr, task:T2, decision:norm-min, artifact:dataset:ds-v1.1, person:user, incident:leak-test)",
+          "minLength": 1
+        },
+        "type": {
+          "$ref": "#/$defs/node_type"
+        },
+        "title": {
+          "type": "string",
+          "description": "Human-readable summary or name of the entity"
+        },
+        "body": {
+          "type": "string",
+          "description": "Detailed explanation, context, or hypothesis/conclusion"
+        },
+        "properties": {
+          "type": "object",
+          "description": "Arbitrary metadata such as version, alias, tags, metrics, author, run_id"
+        },
+        "created_at": {
+          "type": "string",
+          "description": "Timestamp when entity was created or occurred (e.g. YYYY-MM-DD HH:MM or ISO-8601)"
+        }
+      },
+      "additionalProperties": true
+    },
+    "edge": {
+      "type": "object",
+      "required": ["source", "target", "type"],
+      "properties": {
+        "source": {
+          "type": "string",
+          "description": "ID of the source entity"
+        },
+        "target": {
+          "type": "string",
+          "description": "ID of the target entity"
+        },
+        "type": {
+          "$ref": "#/$defs/edge_type"
+        },
+        "valid_from": {
+          "type": ["string", "null"],
+          "description": "Start of assertion / validity time window"
+        },
+        "valid_to": {
+          "type": ["string", "null"],
+          "description": "End of validity window (null if currently active/valid)"
+        },
+        "recorded_at": {
+          "type": ["string", "null"],
+          "description": "When the relationship was recorded into the graph"
+        },
+        "source_ref": {
+          "type": ["string", "null"],
+          "description": "Provenance pointer (file path, line number, commit, journal timestamp)"
+        },
+        "confidence": {
+          "type": "number",
+          "minimum": 0.0,
+          "maximum": 1.0,
+          "default": 1.0,
+          "description": "Confidence level between 0.0 and 1.0"
+        },
+        "properties": {
+          "type": "object",
+          "description": "Arbitrary edge metadata e.g. rationale, metrics, condition"
+        }
+      },
+      "additionalProperties": true
+    }
+  }
+}
