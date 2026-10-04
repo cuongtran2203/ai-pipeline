@@ -86,7 +86,7 @@ def load_policy(run_dir, override=None):
     """
     p = policy_path(run_dir, override)
     try:
-        with open(p, encoding="utf-8-sig") as f:  # -sig: chiu duoc BOM do PowerShell ghi
+        with statefile_mod.open_read(p, encoding="utf-8-sig") as f:  # -sig: chiu duoc BOM do PowerShell ghi
             return json.load(f)
     except (OSError, ValueError):
         return None
@@ -105,7 +105,7 @@ def policy_status(run_dir, override=None):
     """
     p = policy_path(run_dir, override)
     try:
-        with open(p, encoding="utf-8-sig") as f:
+        with statefile_mod.open_read(p, encoding="utf-8-sig") as f:
             text = f.read()
     except FileNotFoundError:
         return "missing", None, []
@@ -168,7 +168,7 @@ def read_usage(run_dir, override=None):
     """
     p = override or os.path.join(run_dir, USAGE_FILE)
     try:
-        with open(p, encoding="utf-8-sig") as f:  # -sig: chiu duoc BOM do PowerShell ghi
+        with statefile_mod.open_read(p, encoding="utf-8-sig") as f:  # -sig: chiu duoc BOM do PowerShell ghi
             u = json.load(f)
         return u if isinstance(u, dict) else {}
     except (OSError, ValueError):
@@ -207,7 +207,7 @@ def read_usage_strict(run_dir, override=None):
     """
     p = override or os.path.join(run_dir, USAGE_FILE)
     try:
-        with open(p, encoding="utf-8-sig") as f:
+        with statefile_mod.open_read(p, encoding="utf-8-sig") as f:
             text = f.read()
     except FileNotFoundError:
         return {}
@@ -266,7 +266,7 @@ def read_started_map(run_dir):
     """
     p = os.path.join(run_dir, "started.json")
     try:
-        with open(p, encoding="utf-8-sig") as f:
+        with statefile_mod.open_read(p, encoding="utf-8-sig") as f:
             text = f.read()
     except FileNotFoundError:
         return {}
@@ -320,7 +320,7 @@ def read_admission(run_dir):
     """Doc admission.json: thieu -> {}; TON TAI ma rong/sai kieu -> StateCorrupt (RV4 P2)."""
     p = admission_path(run_dir)
     try:
-        with open(p, encoding="utf-8-sig") as f:
+        with statefile_mod.open_read(p, encoding="utf-8-sig") as f:
             text = f.read()
     except FileNotFoundError:
         return {}

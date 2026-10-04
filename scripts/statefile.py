@@ -60,6 +60,19 @@ def _lock_acquire(handle):
         fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
 
 
+def open_read(path, encoding="utf-8-sig", tries=None, delay=None):
+    """open(path) for reading that survives a concurrent os.replace on Windows (PermissionError for a moment)."""
+    tries = _REPLACE_TRIES if tries is None else tries
+    delay = _REPLACE_DELAY if delay is None else delay
+    for attempt in range(tries):
+        try:
+            return open(path, encoding=encoding)
+        except PermissionError:
+            if attempt == tries - 1 or os.name != "nt":
+                raise
+            time.sleep(delay)
+
+
 def _lock_release(handle):
     if msvcrt is not None:
         handle.seek(0)
@@ -78,8 +91,13 @@ def file_lock(path, timeout=DEFAULT_TIMEOUT, poll=0.02):
     deadline = None if timeout is None else time.monotonic() + timeout
     try:
         if os.fstat(handle.fileno()).st_size == 0:
-            handle.write(b"\0")
-            handle.flush()
+            # Initialising the lock file races with another process that already locks byte 0 (Windows
+            # refuses a write into a locked range). Locking works on an empty file, so losing this race is harmless.
+            try:
+                handle.write(b"\0")
+                handle.flush()
+            except OSError:
+                pass
         while True:
             try:
                 _lock_acquire(handle)

@@ -1,4 +1,4 @@
-﻿# Spec: dự báo nhu cầu hàng ngày theo SKU
+# Spec: dự báo nhu cầu hàng ngày theo SKU
 
 ## Mục tiêu
 Dự báo nhu cầu 14 ngày tới cho từng SKU để đặt hàng tồn kho, giảm thiếu hàng mà không dồn kho.

@@ -1,0 +1,17 @@
+{
+  "_note": "Khoi hooks MAU cho .claude/settings.json (ai-pipeline, wave HK). Cai bang: ai-pipeline hooks install --path <du-an>. Lenh nay MERGE vao settings hien co, giu nguyen hook/khoa khac cua ban; khong can copy tay.",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Read|Edit|MultiEdit|Write|NotebookEdit|Bash|Grep|Glob",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python",
+            "args": ["${CLAUDE_PROJECT_DIR}/scripts/pipeline_guard.py"]
+          }
+        ]
+      }
+    ]
+  }
+}

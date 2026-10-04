@@ -1,0 +1,14 @@
+#!/bin/sh
+# Mẫu pre-commit cho ai-pipeline (KHÔNG tự cài) — copy vào .git/hooks/pre-commit rồi `chmod +x`.
+#
+# Cơ chế: chỉ chạy EVAL TĨNH khi commit có đụng cấu hình agent (skills/, roles/,
+# AGENTS.md, templates/, scripts/pipeline_guard.py). Static nhanh, không cần agent,
+# nên an toàn để chạy mỗi lần commit. KHÔNG chạy behavioral ở đây (tốn tiền).
+#
+# Dùng `python` (Windows/Git-Bash) hoặc `python3`; chọn cái có sẵn.
+set -e
+PY=python
+command -v "$PY" >/dev/null 2>&1 || PY=python3
+
+# Đảm bảo chỉ chạy khi cấu hình agent thay đổi: --changed tự lọc và trả 0 nếu không đụng.
+exec "$PY" scripts/evals.py run --changed
