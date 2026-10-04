@@ -19,6 +19,7 @@ Done = checkpoint + dataset card + eval.json + both reports in the module direct
 
 
 ## Seal test (nhãn test)
-- Data analyst tạo `runs/<id>/eval_manifest.json` bằng `scripts/seal.py manifest` (chỉ hash + đường dẫn, KHÔNG chứa nhãn).
+- Data analyst tạo `runs/<id>/eval_manifest.json` bằng `scripts/seal.py manifest` (chỉ hash + đường dẫn tương đối, KHÔNG chứa nhãn); đặt nhãn ngoài checkout bằng `--labels-dir`/`SEAL_LABELS_ROOT`.
 - module-dev chỉ train/val: cấm đọc/ghi log mang nhãn test, không tự mở nhãn test.
-- Integrator: khoá recipe (`seal.py lock`) rồi `seal.py grant` đúng MỘT lần; mở lại gắn `exploratory` (không còn blind final). Chấm một lượt, công bố metric kèm n/slice/CI.
+- Integrator: khoá recipe (`seal.py lock`) rồi `seal.py grant --task <T>` đúng MỘT lần (role lấy từ plan.json); sửa threshold sau lock bị từ chối; mở lại gắn `exploratory` (không còn blind final); kiểm audit bằng `seal.py verify-audit`. Chấm một lượt, công bố metric kèm n/slice/CI.
+- seal chỉ ở mức mã, không phải biên bảo vệ filesystem (xem `scripts/seal.md`).

@@ -14,7 +14,7 @@ Ghép pipeline và kiểm thử end-to-end.
 ## Nhiệm vụ
 - Ghép module theo architecture, áp tiền/hậu xử lý, chạy e2e trên val real.
 - Đo từng module và từng field end-to-end; so với baseline trên cùng bộ đánh giá.
-- **Seal nhãn test**: khoá recipe trước (`python scripts/seal.py lock <run_dir> --model-version <V> --threshold-file <F>`), rồi `python scripts/seal.py grant <run_dir> --role integrator --task <T> --purpose <mục-đích>` đúng MỘT lần để lấy đường dẫn nhãn test; chấm một lượt, công bố metric kèm n/slice/CI. Lần mở thứ hai gắn cờ `exploratory`, không còn là blind final.
+- **Seal nhãn test**: khoá recipe trước (`python scripts/seal.py lock <run_dir> --model-version <V> --threshold-file <F>`), rồi `python scripts/seal.py grant <run_dir> --task <T> --purpose <mục-đích>` (role lấy TỪ PLAN; `--role` chỉ để kiểm chéo) đúng MỘT lần để lấy đường dẫn nhãn test; sửa threshold sau khi khoá bị từ chối (`recipe_changed`). Chấm một lượt, công bố metric kèm n/slice/CI; kiểm audit toàn vẹn bằng `python scripts/seal.py verify-audit <run_dir>`. Lần mở thứ hai gắn cờ `exploratory`, không còn là blind final. Seal chỉ ở mức mã, không phải biên bảo vệ filesystem (xem `scripts/seal.md`).
 
 - Merge các branch worktree của module theo thứ tự deps (giải quyết xung đột, chạy lại test từng module sau merge) trước khi chạy e2e.
 
