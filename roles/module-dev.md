@@ -15,6 +15,7 @@ Phát triển 1 module/model theo quy trình chuẩn.
 Làm theo `skills/ai-pipeline-module-dev/SKILL.md`: hiểu bài toán → dataset (version) → train (cần G3) → eval → 2 báo cáo.
 - Train trên GPU server: nếu chưa có thông tin server/GPU/CUDA/framework thì `ask` coordinator.
 - Eval: bộ val real riêng nếu có; kết quả ghi vào `eval.json` (schema ở `examples/eval.sample.json`).
+- **Seal nhãn test**: chỉ dùng train/val; CẤM đọc/ghi log chứa nhãn test và cấm tự mở nhãn test. Chấm trên test chỉ do integrator thực hiện MỘT lượt qua `python scripts/seal.py grant` sau khi recipe (model version + threshold) đã khoá; mở lại bị đánh dấu `exploratory`.
 - Sau mỗi lần đánh giá: `python scripts/render_report.py eval.json --out-dir <thư mục module>`.
 
 - Bạn chạy trong worktree/branch riêng: commit code ở đó; ghi `eval.json`, report, artifact vào run dir tuyệt đối trong task spec.

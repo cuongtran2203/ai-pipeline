@@ -16,3 +16,9 @@ description: Process for developing one AI model/module inside the pipeline work
 8. **Giữ đơn giản**: trước khi đổi kiến trúc, trả lời (a) phân bố train vs test có lệch không? (b) lỗi trên test nói gì về cách training? Sửa từ đó.
 
 Done = checkpoint + dataset card + eval.json + both reports in the module directory.
+
+
+## Seal test (nhãn test)
+- Data analyst tạo `runs/<id>/eval_manifest.json` bằng `scripts/seal.py manifest` (chỉ hash + đường dẫn, KHÔNG chứa nhãn).
+- module-dev chỉ train/val: cấm đọc/ghi log mang nhãn test, không tự mở nhãn test.
+- Integrator: khoá recipe (`seal.py lock`) rồi `seal.py grant` đúng MỘT lần; mở lại gắn `exploratory` (không còn blind final). Chấm một lượt, công bố metric kèm n/slice/CI.

@@ -1,0 +1,14 @@
+{
+  "schema": "eval_manifest/v1",
+  "run_id": "<run_id>",
+  "dataset_version": "ds-v1",
+  "split_id": "test-v1",
+  "n_samples": 0,
+  "ids_path": "runs/<run_id>/eval/ids.txt",
+  "ids_sha256": "<sha256 cua danh sach ID>",
+  "labels_path": "runs/<run_id>/eval/labels-sealed.txt",
+  "labels_sha256": "<sha256 cua file nhan>",
+  "sealed_at": "<UTC ISO-8601>",
+  "created_by": "<actor>",
+  "manifest_hash": "<sha256 cua manifest (khong gom truong nay)>"
+}

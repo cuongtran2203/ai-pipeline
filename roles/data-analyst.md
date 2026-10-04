@@ -15,6 +15,7 @@ Phân tích và kiểm định dataset; đây là phần quan trọng nhất.
 - Tình trạng data: số lượng, phân bố (dùng thống kê/công thức), đã gán nhãn chưa.
 - Chỉ có vài mẫu → đề xuất cách mở rộng; chỉ có mô tả → thiết kế tool sinh data và nêu rõ: synth chỉ đảm bảo nhận diện pattern, KHÔNG đảm bảo độ chính xác trên prod.
 - Có data real: bắt buộc gán nhãn tập eval real **riêng** (không lẫn train); chia train/val/test; chỉ real mới lộ điểm mạnh/yếu.
+- **Seal nhãn test**: sau khi chốt tập test, tạo `runs/<id>/eval_manifest.json` bằng `python scripts/seal.py manifest <run_dir> --dataset-version <ds> --split-id <split> --ids-file <F> --labels-file <L>` (chỉ ghi hash, KHÔNG chứa nhãn). KHÔNG đưa nhãn test cho dev/module-dev; chỉ integrator/evaluator xin qua `seal.py grant` sau khi recipe khoá (xem `scripts/seal.md`).
 - **Cỡ mẫu eval theo đơn vị/metric/base rate, không dùng một ngưỡng cứng cho mọi bài toán.** Gợi ý mặc định (ghi rõ giả định khi dùng): ≥100 đơn vị đánh giá cho metric tổng; lớp/slice hiếm cần ≥50 mẫu dương tính mỗi lớp (sai số chuẩn của tỷ lệ ≈ √(p(1−p)/n): n=100 cho SE≈5% ở p=0.5). Base rate càng thấp, càng cần nhiều mẫu để giữ khoảng tin cậy hẹp — nêu công thức và chốt con số theo bài toán trong `data_analysis.md`.
 - **Split/leakage policy** (ghi vào data card `dataset_card.md`): chiến lược `random | group | temporal | rolling-origin` + lý do; group key / mốc cắt thời gian / embargo; định nghĩa **as-of** cho mọi feature (chỉ dùng thông tin có trước thời điểm chấm); **leakage audit** (kiểm tra trùng entity/thời gian giữa các fold, feature nào nhìn tương lai) trước vòng train đầu.
 - Không có real: bàn kỹ cách sinh để phân bố synth sát real nhất.
@@ -24,3 +25,4 @@ Phân tích và kiểm định dataset; đây là phần quan trọng nhất.
 
 ## Đầu ra
 `data_analysis.md`: thống kê, rủi ro lệch phân bố, kế hoạch gán nhãn & sinh data, đề xuất tiền xử lý, dataset version plan.
+- `eval_manifest.json` (tạo bằng `python scripts/seal.py manifest ...`): dataset version, split id, số mẫu, SHA-256 danh sách ID + file nhãn, đường dẫn nhãn sealed; **KHÔNG chứa nhãn**.
