@@ -19,10 +19,12 @@ Facts (from the Graphify README): PyPI package **`graphifyy`** (double *y*), com
 
 ## Steps
 1. **Init (always, first run in a project):** check `graphify --version`. Missing ⇒ list the package for approval (rule 1). Approved ⇒ install into the approved environment, then confirm commands with `graphify --help`.
-2. **Build:** `graphify extract <included paths> --code-only` for code; add `--backend <approved>` only for approved doc paths. Whole project = every folder not excluded in rule 4. Run it inside the approved sandbox.
+2. **Build (verified on graphifyy 0.9.74, Windows):** put the exclusions of rule 4 in `.graphifyignore` at the project root (gitignore syntax; Graphify also honours `.gitignore`, so use `--no-gitignore` when code you want graphed is git-ignored, e.g. `runs/*/modules`). Then, with every LLM API key unset so nothing can leave the machine:
+   `env -u ANTHROPIC_API_KEY -u OPENAI_API_KEY -u GEMINI_API_KEY -u GOOGLE_API_KEY -u MOONSHOT_API_KEY -u DEEPSEEK_API_KEY <venv>/graphify extract . --code-only --no-gitignore`
+   then the report (without LLM community naming): same `env -u …` prefix + `graphify cluster-only . --no-label`. Docs/PDF/images are skipped by `--code-only`; add `--backend <approved>` only for paths the human approved. Run inside the approved sandbox.
 3. **Read the result:** open `graphify-out/GRAPH_REPORT.md` (god nodes, surprising connections, suggested questions) and log 2–4 `insight` entries to the notebook (`scripts/notebook.py`) with the file path as evidence.
 4. **Use:** before grepping or reading many files, ask `graphify query "<question>"`, `graphify path "<A>" "<B>"`, `graphify explain "<symbol or doc>"`; cite the nodes/files found. If `graphify-out/graph.json` is absent or stale (older than the last phase), refresh it first.
-5. **Refresh:** after every phase and after a large merge, update incrementally (Graphify's documented `--update` mode, re-checking the exact form with `--help`) and re-log new insights.
+5. **Refresh:** after every phase and after a large merge run `graphify update .` (re-extracts code files only, no LLM/API cost; `--force` only after refactors that delete code), then `graphify cluster-only . --no-label` if the report is needed; re-log new insights.
 6. **If it cannot be installed/run** (no approval, no sandbox, backend refused): say so in `decisions.md` and continue without it; never install "temporarily".
 
 `scripts/project_status.py` reports whether `graphify-out/graph.json` exists and how old it is.

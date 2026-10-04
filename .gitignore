@@ -5,3 +5,4 @@ __pycache__/
 .opencode/
 100-sync-hw-v1/
 graphify-out/
+.venv-graphify/
