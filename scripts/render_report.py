@@ -39,9 +39,11 @@ def render_md(d):
     md = [f"# Báo cáo: {d['title']}\n",
           f"Model `{v.get('model', '?')}` · Dataset `{v.get('dataset', '?')}` · Baseline `{d.get('baseline_name', '-')}`\n",
           "## 1. Tổng quan\n",
+          *( [bullet("Vòng thí nghiệm", d["round"])] if d.get("round") else [] ),
           bullet("Hiện trạng bài toán", o["status"]),
-          bullet("Phương pháp đang tiến hành", o["method"]),
-          bullet("Kết quả hiện tại", o["result"]),
+          bullet("Thí nghiệm thế nào", o["method"]),
+          bullet("Giải quyết được vấn đề gì", o.get("solved") or "_(chưa ghi: vòng này chưa giải quyết được vấn đề nào hoặc người viết bỏ sót — điền `overview.solved`)_"),
+          bullet("Kết quả", o["result"]),
           "\n## 2. Nội dung chi tiết\n",
           "### Bảng độ chính xác chi tiết từng thành phần\n"]
     for tb in d["tables"]:

@@ -2,8 +2,10 @@
 
 ## 1. Tổng quan
 - **Hiện trạng bài toán:** mục tiêu, baseline, vấn đề chính, bộ đánh giá và giới hạn nhãn.
-- **Phương pháp đang tiến hành:** data (nguồn, số lượng, tỉ lệ trộn, chia train/val/test), model và checkpoint khởi tạo, thay đổi so với lần trước, cấu hình pipeline.
-- **Kết quả hiện tại:** số đo module và end-to-end chính, so với baseline; kết luận ngắn.
+- **Vòng thí nghiệm:** tên/số vòng.
+- **Thí nghiệm thế nào:** data (nguồn, số lượng, tỉ lệ trộn, chia train/val/test), model và checkpoint khởi tạo, thay đổi so với lần trước, cấu hình pipeline.
+- **Giải quyết được vấn đề gì:** vấn đề đã giải quyết / chưa giải quyết (kèm bằng chứng số đo).
+- **Kết quả:** số đo module và end-to-end chính, so với baseline; kết luận ngắn.
 
 ## 2. Nội dung chi tiết
 ### Bảng độ chính xác chi tiết từng thành phần

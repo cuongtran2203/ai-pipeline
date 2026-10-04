@@ -33,7 +33,8 @@ At run start `python scripts/notebook.py init runs/<id> --title "<problem>"`. Wo
 
 ## Hard rules
 - Data first; never promise production accuracy from synthetic data alone.
-- Version every dataset/model; after every evaluation produce `report.md` + `report.html` (`ai-pipeline-report`).
+- **After every experiment round** (a train/eval/probe/ablation round, an optimize round, a phase-end evaluation) ALWAYS produce `report.md` + `report.html` into `runs/<id>/reports/round-NN-<slug>/` (module-level: also into the module dir) via `ai-pipeline-report`. The md is concise and covers: how the experiment was run, which problem it solved (and which it did not), and the detailed results. The html visualizes the error clusters. A round is not finished, and the next round may not start, until both files exist and are logged in the notebook.
+- Version every dataset/model.
 - User-facing text in Vietnamese.
 - Know the ceiling before burning rounds (`ai-pipeline-feasibility`).
 - Never skip G1/G2/G3; never train without G3 information.
