@@ -81,14 +81,42 @@ def orca_catalog():
     return dict(FALLBACK), "built-in fallback"
 
 
+def extra_dirs():
+    """Dirs where an agent CLI may live although it is not on this process's PATH: registry PATH (user+machine)
+    and every nvm Node version dir (a CLI installed under another Node version is invisible once nvm switches)."""
+    dirs = []
+    if os.name == "nt":
+        rc, out = run(["powershell", "-NoProfile", "-Command",
+                       "[Environment]::GetEnvironmentVariable('Path','User')+';'+[Environment]::GetEnvironmentVariable('Path','Machine')"], 15)
+        dirs += [d for d in out.strip().split(";") if d]
+        base = os.path.join(os.environ.get("LOCALAPPDATA", ""), "nvm")
+        if os.path.isdir(base):
+            dirs += [os.path.join(base, d) for d in sorted(os.listdir(base)) if d.startswith("v")]
+    else:
+        nvm = os.path.expanduser("~/.nvm/versions/node")
+        if os.path.isdir(nvm):
+            dirs += [os.path.join(nvm, d, "bin") for d in sorted(os.listdir(nvm))]
+    return [d for d in dict.fromkeys(dirs) if os.path.isdir(d)]
+
+
+def find_cli(cmd, extra):
+    """(path, on_active_path). on_active_path False = installed elsewhere; a shell/Orca launch of `cmd` may fail."""
+    p = shutil.which(cmd)
+    if p:
+        return p, True
+    p = shutil.which(cmd, path=os.pathsep.join(extra))
+    return p, False
+
+
 def detect(show_all=False):
     st = orca_json("status")
     runtime_ok = bool(st and st.get("ok") and (st.get("result", {}).get("runtime", {}) or {}).get("reachable"))
     accounts, hosts = orca_json("account", "list"), orca_json("host", "list")
     cat, src = orca_catalog()
     rows = []
+    extra = extra_dirs()
     for aid, cmd in sorted(cat.items()):
-        path = shutil.which(cmd)
+        path, active = find_cli(cmd, extra)
         if not path and not show_all:
             continue
         ver = None
@@ -96,7 +124,7 @@ def detect(show_all=False):
             rc, out = run([path, "--version"], 8)
             ver = out.strip().splitlines()[0][:60] if rc == 0 and out.strip() else None
         rows.append({"id": aid, "cmd": cmd, "cli": path, "version": ver, "installed": bool(path),
-                     "usable": bool(path) and runtime_ok})
+                     "on_active_path": active if path else None, "usable": bool(path) and runtime_ok})
     return {"orca_runtime_reachable": runtime_ok, "catalog_source": src, "catalog_size": len(cat),
             "orca_accounts": accounts.get("result") if accounts else None, "hosts": hosts.get("result") if hosts else None,
             "agents": rows,
@@ -112,7 +140,8 @@ def cmd_detect(a):
     print(f"Orca runtime: {'OK' if d['orca_runtime_reachable'] else 'NOT reachable (run: orca open)'}  | catalog: {d['catalog_size']} agents ({d['catalog_source']})")
     print(f"{'agent id':<13} {'installed':<10} {'usable':<7} command / version")
     for r in d["agents"]:
-        print(f"{r['id']:<13} {str(r['installed']):<10} {str(r['usable']):<7} {r['cmd']}  {r['version'] or ''}")
+        warn = "  [NOT on the active PATH: installed under another Node version/dir; launch may fail, see probe]" if r["installed"] and not r["on_active_path"] else ""
+        print(f"{r['id']:<13} {str(r['installed']):<10} {str(r['usable']):<7} {r['cmd']}  {r['version'] or ''}{warn}")
     print("\n" + d["note"])
     return 0
 
@@ -157,6 +186,10 @@ def cmd_probe(a):
         wl = orca_json("orchestration", "worker-list", "--run", pr)
         for w in ((wl or {}).get("result", {}).get("workers") or (wl or {}).get("result", {}).get("rows") or []):
             if w.get("dispatchId"):
+                if not ok:  # show what the agent's terminal looked like: usually a trust/login/permission prompt
+                    rd = orca_json("orchestration", "worker-read", "--dispatch", w["dispatchId"], "--source", "auto")
+                    txt = json.dumps((rd or {}).get("result", {}), ensure_ascii=False)
+                    detail += " | last output: " + re.sub(r"\n|\s+", " ", txt)[-500:]
                 orca_json("orchestration", "worker-release", "--dispatch", w["dispatchId"])
     finally:
         if restore:
