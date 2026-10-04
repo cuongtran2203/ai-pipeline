@@ -1,0 +1,165 @@
+#!/usr/bin/env python3
+"""Build a local Obsidian vault that graphs the project's DOCUMENTS (and optionally its code graph).
+
+  obsidian_vault.py [--run runs/<id> ...] [--out vault] [--graphify <path to graphify exe>]
+
+Vault layout (open `<out>` as a vault in Obsidian; Graph view then shows the links):
+  INDEX.md                      hub linking every run's map of content
+  docs/<project paths>.md       copies of AGENTS.md, README, skills/*/SKILL.md, roles/*.md, templates, and per run
+                                spec/decisions/feasibility, artifacts/**.md, modules/**/report.md, reports/**.md
+  docs/runs/<id>/notebook/entries/NNN-slug.md   one note per notebook entry (tags = type, `Refs` become [[wikilinks]])
+  docs/runs/<id>/INDEX.md       map of content: decisions, insights, experiments, errors, reports, artifacts
+  code/                         Graphify's `export obsidian` of graphify-out/graph.json (only with --graphify)
+
+Stdlib only, nothing leaves the machine, derived output (keep `vault/` out of git). Excludes data, images,
+checkpoints, notebook/export copies, graphify-out and virtualenvs. Safe to rerun: only a folder carrying the
+`.vault-generated` marker is ever deleted.
+"""
+import argparse
+import glob
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+
+sys.stdout.reconfigure(encoding="utf-8")
+sys.stderr.reconfigure(encoding="utf-8")
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+TOP_DOCS = ["AGENTS.md", "README.md"]
+TOP_GLOBS = ["skills/*/SKILL.md", "roles/*.md", "templates/*.md"]
+SKIP_PARTS = ("/data/", "/export/", "/__pycache__/", "/img/", "/models/", "/results/", "/blind/")
+KEY_ENV = ["ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY", "MOONSHOT_API_KEY", "DEEPSEEK_API_KEY"]
+
+
+def slug(s, n=48):
+    s = re.sub(r"[^\w\- ]+", "", s, flags=re.U).strip().replace(" ", "-")
+    return (s[:n] or "entry").strip("-")
+
+
+def copy_md(src, out_docs):
+    rel = os.path.relpath(src, ROOT).replace("\\", "/")
+    dst = os.path.join(out_docs, rel)
+    os.makedirs(os.path.dirname(dst), exist_ok=True)
+    shutil.copyfile(src, dst)
+    return rel[:-3]  # wikilink target without .md
+
+
+def wikilink(ref, known):
+    ref = ref.replace("\\", "/")
+    if ref.startswith(ROOT.replace("\\", "/")):
+        ref = ref[len(ROOT.replace("\\", "/")) + 1:]
+    base = ref[:-3] if ref.endswith(".md") else ref
+    return f"[[{base}]]" if base in known else f"`{ref}`"
+
+
+def build_run(run_dir, out_docs, known):
+    run_dir = os.path.abspath(run_dir)
+    rid = os.path.basename(run_dir)
+    rel_run = f"runs/{rid}"
+    copied = []
+    for p in glob.glob(os.path.join(run_dir, "**", "*.md"), recursive=True):
+        q = p.replace("\\", "/")
+        if any(part in q for part in SKIP_PARTS) or "/notebook/" in q:
+            continue
+        known.add(copy_md(p, out_docs))
+        copied.append(os.path.relpath(p, ROOT).replace("\\", "/")[:-3])
+    jl = os.path.join(run_dir, "notebook", "journal.jsonl")
+    entries = []
+    if os.path.exists(jl):
+        for i, line in enumerate(open(jl, encoding="utf-8")):
+            line = line.strip()
+            if not line:
+                continue
+            e = json.loads(line)
+            name = f"{len(entries) + 1:03d}-{slug(e['title'])}"
+            e["_name"], e["_link"] = name, f"{rel_run}/notebook/entries/{name}"
+            entries.append(e)
+            known.add(e["_link"])
+    ed = os.path.join(out_docs, rel_run, "notebook", "entries")
+    os.makedirs(ed, exist_ok=True)
+    for i, e in enumerate(entries):
+        tags = sorted({e["type"], *e.get("tags", [])})
+        fm = ["---", f"type: {e['type']}", f"author: {e.get('author', '-')}", f"date: \"{e['ts']}\"",
+              "tags: [" + ", ".join(t.replace(" ", "-") for t in tags) + "]", "---", "", f"# {e['title']}", "", e["body"].strip(), ""]
+        if e.get("metrics"):
+            fm += ["Metrics: " + ", ".join(f"`{k}`={v}" for k, v in e["metrics"].items()), ""]
+        if e.get("refs"):
+            fm += ["Refs: " + ", ".join(wikilink(r, known) for r in e["refs"]), ""]
+        nav = []
+        if i > 0:
+            nav.append("← " + f"[[{entries[i - 1]['_link']}]]")
+        if i + 1 < len(entries):
+            nav.append(f"[[{entries[i + 1]['_link']}]] →")
+        if nav:
+            fm += [" · ".join(nav), ""]
+        open(os.path.join(ed, e["_name"] + ".md"), "w", encoding="utf-8").write("\n".join(fm))
+    groups = {}
+    for e in entries:
+        groups.setdefault(e["type"], []).append(e)
+    moc = [f"# Bản đồ nội dung: {rid}", ""]
+    for t, title in (("decision", "Quyết định"), ("insight", "Đúc kết"), ("experiment", "Thí nghiệm"),
+                     ("error", "Lỗi / phân tích lỗi"), ("research", "Research"), ("gate", "Gate")):
+        if t in groups:
+            moc += [f"## {title}", *[f"- [[{e['_link']}]] — {e['title']}" for e in groups[t]], ""]
+    rep = [c for c in copied if "/reports/" in c or c.endswith("/report")]
+    art = [c for c in copied if c not in rep]
+    if rep:
+        moc += ["## Báo cáo", *[f"- [[{c}]]" for c in rep], ""]
+    if art:
+        moc += ["## Tài liệu / artifact", *[f"- [[{c}]]" for c in art], ""]
+    open(os.path.join(out_docs, rel_run, "INDEX.md"), "w", encoding="utf-8").write("\n".join(moc))
+    return rid, len(entries), len(copied)
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--run", action="append", help="run dir (default: every runs/*/ that has a notebook or md)")
+    ap.add_argument("--out", default=os.path.join(ROOT, "vault"))
+    ap.add_argument("--graphify", help="path to the graphify executable (adds code/ via `export obsidian`)")
+    a = ap.parse_args()
+    out = os.path.abspath(a.out)
+    marker = os.path.join(out, ".vault-generated")
+    if os.path.exists(out):
+        if not os.path.exists(marker):
+            sys.exit(f"refusing to overwrite {out}: no .vault-generated marker (not made by this script)")
+        shutil.rmtree(out)
+    os.makedirs(out)
+    open(marker, "w").write("generated by scripts/obsidian_vault.py; safe to delete\n")
+    docs = os.path.join(out, "docs")
+    known = set()
+    for f in TOP_DOCS:
+        if os.path.exists(os.path.join(ROOT, f)):
+            known.add(copy_md(os.path.join(ROOT, f), docs))
+    for g in TOP_GLOBS:
+        for p in glob.glob(os.path.join(ROOT, g)):
+            known.add(copy_md(p, docs))
+    runs = a.run or [d for d in glob.glob(os.path.join(ROOT, "runs", "*")) if os.path.isdir(d)]
+    summary = [build_run(r, docs, known) for r in runs]
+    idx = ["# Dự án — bản đồ tri thức", "", "Mở thư mục này như một vault trong Obsidian rồi dùng Graph view.", "",
+           "## Quy tắc & workflow", "- [[AGENTS]] · [[README]]", "- Skills: " + ", ".join(f"[[{k}]]" for k in sorted(known) if k.startswith("skills/")),
+           "- Roles: " + ", ".join(f"[[{k}]]" for k in sorted(known) if k.startswith("roles/")), "", "## Runs"]
+    idx += [f"- [[runs/{rid}/INDEX|{rid}]] — {n} mục sổ thí nghiệm, {c} tài liệu" for rid, n, c in summary]
+    if a.graphify:
+        gx = os.path.abspath(a.graphify)
+        if not os.path.exists(gx) and os.path.exists(gx + ".exe"):
+            gx += ".exe"
+        if not os.path.exists(gx):
+            sys.exit(f"graphify executable not found: {a.graphify}")
+        a.graphify = gx
+        env = {k: v for k, v in os.environ.items() if k not in KEY_ENV}
+        graph = os.path.join(ROOT, "graphify-out", "graph.json")
+        if os.path.exists(graph):
+            r = subprocess.run([a.graphify, "export", "obsidian", "--graph", graph, "--dir", os.path.join(out, "code")],
+                               env=env, capture_output=True, text=True, encoding="utf-8")
+            print((r.stdout or r.stderr).strip().splitlines()[0] if (r.stdout or r.stderr) else "graphify export done")
+            idx += ["", "## Code graph (Graphify)", "- Thư mục `code/` (xuất bằng `graphify export obsidian`, chỉ AST local)."]
+        else:
+            print("no graphify-out/graph.json: skipping code/ (run the ai-pipeline-graph steps first)")
+    open(os.path.join(out, "INDEX.md"), "w", encoding="utf-8").write("\n".join(idx) + "\n")
+    print(f"vault: {out}  ({len(known)} doc notes; runs: {', '.join(r for r, _, _ in summary) or '-'})")
+
+
+if __name__ == "__main__":
+    main()

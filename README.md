@@ -23,6 +23,7 @@ spec.md ─▶ G1 clarify ─▶ Analysis ×3 ─▶ Debate/Plan ─▶ G2 appro
 | `ceiling.json` (skill `ai-pipeline-feasibility`) | ước lượng giới hạn khả thi C0/C1/C2, luật dừng vòng tối ưu |
 | `scripts/notebook.py init\|log\|export\|show` | sổ thí nghiệm theo bài toán + export cho NotebookLM (skill `ai-pipeline-notebook`) |
 | Graphify (skill `ai-pipeline-graph`) | knowledge graph toàn dự án khi init; `graphify query/path/explain` |
+| `scripts/obsidian_vault.py [--graphify EXE]` | vault Obsidian: docs + sổ thí nghiệm (wikilinks) + code graph Graphify |
 | `scripts/sync_skills.py [--check]` | `skills/` → `.claude/skills`, `.agents/skills` |
 
 See `AGENTS.md` for rules and `skills/ai-pipeline/SKILL.md` for the phases.

@@ -27,4 +27,8 @@ Facts (from the Graphify README): PyPI package **`graphifyy`** (double *y*), com
 5. **Refresh:** after every phase and after a large merge run `graphify update .` (re-extracts code files only, no LLM/API cost; `--force` only after refactors that delete code), then `graphify cluster-only . --no-label` if the report is needed; re-log new insights.
 6. **If it cannot be installed/run** (no approval, no sandbox, backend refused): say so in `decisions.md` and continue without it; never install "temporarily".
 
+## Obsidian: graph the documents too
+Graphify `--code-only` graphs code only (docs would need an LLM backend, not approved). Documents are graphed locally by **Obsidian**:
+`python scripts/obsidian_vault.py --graphify <venv>/graphify` builds `vault/` (derived, git-ignored): `docs/` = copies of AGENTS/README/skills/roles/templates and per run spec, decisions, feasibility, artifacts, reports, plus **one note per notebook entry** (tags = type, `Refs` → `[[wikilinks]]`, prev/next links) and a map of content per run (`docs/runs/<id>/INDEX`); `code/` = Graphify's `export obsidian` of the code graph (local AST only); `INDEX.md` = hub. The human opens `vault/` as a vault in Obsidian and uses Graph view (filter by tag `#experiment`, `#insight`, `#error`…). Rebuild after every phase together with `graphify update .`. Nothing leaves the machine; it excludes data, images, checkpoints, notebook exports, venvs. Obsidian itself is installed by the human; agents never install it.
+
 `scripts/project_status.py` reports whether `graphify-out/graph.json` exists and how old it is.
