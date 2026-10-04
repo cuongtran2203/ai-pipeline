@@ -28,7 +28,7 @@ if ROOT not in sys.path:
 import pipeline_guard as pg  # noqa: E402
 from ai_pipeline import hooks as hooks_mod  # noqa: E402
 
-ENV_KEYS = ("AI_PIPELINE_ROLE", "AI_PIPELINE_TASK_CONTEXT", "AI_PIPELINE_OWNS",
+ENV_KEYS = ("AI_PIPELINE_ROLE", "AI_PIPELINE_TASK", "AI_PIPELINE_TASK_CONTEXT", "AI_PIPELINE_OWNS",
             "AI_PIPELINE_BUGFIX", "AI_PIPELINE_RUN_DIR", "AI_PIPELINE_WORKTREE",
             "AI_PIPELINE_BRANCH", "AI_PIPELINE_GUARD_POLICY", "AI_PIPELINE_GUARD_AUDIT")
 
@@ -460,6 +460,317 @@ class TestHooksInstall(unittest.TestCase):
                                cwd=ROOT, env=env)
             self.assertEqual(r.returncode, 0, args + [r.stdout + r.stderr])
         self.assertNotIn("pipeline_guard.py", json.dumps(self._read_settings()))
+
+
+class TestRecursiveSearchFH(EnvScrub):
+    """Wave FH-1: tim kiem de quy phu len file nhan bi chan (su co rg timesheet-ocr)."""
+
+    def setUp(self):
+        super().setUp()
+        os.makedirs(os.path.join(self.cwd, "labels"))
+        with open(os.path.join(self.cwd, "labels", "gold.json"), "w",
+                  encoding="utf-8", newline="\n") as f:
+            f.write('{"y": 1}')
+        os.makedirs(os.path.join(self.cwd, "src"))
+        with open(os.path.join(self.cwd, "src", "main.py"), "w",
+                  encoding="utf-8", newline="\n") as f:
+            f.write("print(1)\n")
+        os.makedirs(os.path.join(self.cwd, ".git"))
+        self.pol = fresh_policy(protected_paths=["labels/gold.json"])
+
+    def check(self, event, policy=None, **ctxkw):
+        return pg.evaluate(event, policy or self.pol, self.ctx(**ctxkw))
+
+    def test_deny_rg_dot(self):
+        r = self.check(ev("Bash", command="rg -n . ."))
+        self.assertFalse(r["allowed"])
+        self.assertEqual(r["rule"], "label_protection")
+
+    def test_deny_grep_r(self):
+        for c in ("grep -rn password .", "grep -R foo .",
+                  "egrep -rn 'a|b' .", "ag foo ."):
+            with self.subTest(cmd=c):
+                r = self.check(ev("Bash", command=c))
+                self.assertFalse(r["allowed"], c)
+                self.assertEqual(r["rule"], "label_protection")
+
+    def test_deny_git_grep(self):
+        r = self.check(ev("Bash", command="git grep -n password"))
+        self.assertFalse(r["allowed"])
+        self.assertEqual(r["rule"], "label_protection")
+
+    def test_deny_find_exec(self):
+        r = self.check(ev("Bash", command="find . -type f -exec grep -l foo {} +"))
+        self.assertFalse(r["allowed"])
+        self.assertEqual(r["rule"], "label_protection")
+
+    def test_deny_find_piped(self):
+        r = self.check(ev("Bash", command="find . -type f | xargs grep foo"))
+        self.assertFalse(r["allowed"])
+        self.assertEqual(r["rule"], "label_protection")
+
+    def test_deny_findstr(self):
+        r = self.check(ev("Bash", command="findstr /s foo ."))
+        self.assertFalse(r["allowed"])
+        self.assertEqual(r["rule"], "label_protection")
+
+    def test_deny_select_string(self):
+        r = self.check(ev("Bash", command='Select-String -Recurse -Pattern "foo" -Path "."'))
+        self.assertFalse(r["allowed"])
+        self.assertEqual(r["rule"], "label_protection")
+
+    def test_deny_gci_piped(self):
+        r = self.check(ev("Bash", command="Get-ChildItem -Recurse . | Select-String foo"))
+        self.assertFalse(r["allowed"])
+        self.assertEqual(r["rule"], "label_protection")
+
+    def test_deny_explicit_labels_dir(self):
+        r = self.check(ev("Bash", command="rg foo labels"))
+        self.assertFalse(r["allowed"])
+
+    def test_allow_subdir_without_labels(self):
+        for c in ("rg foo src", "grep -rn foo src", "find src -exec cat {} +"):
+            with self.subTest(cmd=c):
+                r = self.check(ev("Bash", command=c))
+                self.assertTrue(r["allowed"], c)
+
+    def test_allow_excluded(self):
+        r = self.check(ev("Bash", command="rg foo . --glob '!*.json'"))
+        self.assertTrue(r["allowed"])
+        r = self.check(ev("Bash", command="grep -rn foo . --exclude='*.json'"))
+        self.assertTrue(r["allowed"])
+
+    def test_exclude_unrelated_does_not_allow(self):
+        r = self.check(ev("Bash", command="rg foo . --glob '!*.png'"))
+        self.assertFalse(r["allowed"])
+
+    def test_allow_integrator_recursive(self):
+        r = self.check(ev("Bash", command="rg -n . ."), role="integrator")
+        self.assertTrue(r["allowed"])
+
+    def test_allow_plain_grep_single_file(self):
+        r = self.check(ev("Bash", command="grep foo src/main.py"))
+        self.assertTrue(r["allowed"])
+
+    def test_echo_search_words_not_flagged(self):
+        r = self.check(ev("Bash", command='echo "rg foo ."'))
+        self.assertTrue(r["allowed"])
+
+    def test_symlink_root_resolved_posix(self):
+        link = os.path.join(self.cwd, "alias")
+        try:
+            os.symlink(os.path.join(self.cwd, "labels"), link)
+        except (OSError, NotImplementedError) as e:
+            self.skipTest(f"khong tao duoc symlink: {e}")
+        if not os.path.islink(link):
+            self.skipTest("symlink khong ton tai sau khi tao")
+        r = self.check(ev("Bash", command="rg foo alias"))
+        if os.name == "posix":
+            self.assertFalse(r["allowed"])
+        else:
+            # Windows: symlink co the can quyen; chi khang dinh khong crash
+            self.assertIn(r["rule"], ("label_protection", None))
+
+
+class TestPushForceFH(EnvScrub):
+    """Wave FH-2: refspec '+' va --mirror bi chan nhu --force."""
+
+    def test_deny_plus_refspec(self):
+        for c in ("git push origin +master", "git push origin +HEAD:master",
+                  "git push origin +refs/heads/a:refs/heads/b"):
+            with self.subTest(cmd=c):
+                r = self.check(ev("Bash", command=c))
+                self.assertFalse(r["allowed"], c)
+                self.assertEqual(r["rule"], "destructive")
+
+    def test_deny_mirror(self):
+        for c in ("git push --mirror", "git push --mirror origin"):
+            with self.subTest(cmd=c):
+                r = self.check(ev("Bash", command=c))
+                self.assertFalse(r["allowed"], c)
+
+    def test_deny_force_with_git_flags(self):
+        r = self.check(ev("Bash", command="git -C sub push --force origin main"))
+        self.assertFalse(r["allowed"])
+        r = self.check(ev("Bash", command="sudo git push --force origin main"))
+        self.assertFalse(r["allowed"])
+
+    def test_allow_plain_push(self):
+        for c in ("git push origin master", "git push -u origin feat",
+                  "git push", "git stash push -m save",
+                  'git commit -m "reset --hard oops"'):
+            with self.subTest(cmd=c):
+                r = self.check(ev("Bash", command=c))
+                self.assertTrue(r["allowed"], c)
+
+
+class TestHostInstallFH(EnvScrub):
+    """Wave FH-3 (mo rong R2) + FH-5 (bo FP quote)."""
+
+    DENY = ["pipx install foo", "pipx inject foo", "easy_install foo",
+            "pip download foo", "python -m pip download foo",
+            "uv add foo", "uv sync", "poetry add foo", "poetry install",
+            "pdm add foo", "pdm install",
+            'bash -c "pip install x"', "sudo pip install x",
+            "env FOO=1 pip install x", "python -m pip install x"]
+
+    def test_deny_new_installers(self):
+        for c in self.DENY:
+            with self.subTest(cmd=c):
+                r = self.check(ev("Bash", command=c))
+                self.assertFalse(r["allowed"], c)
+                self.assertEqual(r["rule"], "host_install")
+
+    def test_allow_in_container(self):
+        for c in ("docker exec cnt pipx install foo",
+                  "docker run --rm img uv sync",
+                  "ssh gpu01 docker exec c poetry install"):
+            with self.subTest(cmd=c):
+                r = self.check(ev("Bash", command=c))
+                self.assertTrue(r["allowed"], c)
+
+    def test_allow_quoted_false_positives(self):
+        for c in ("echo 'pip install is bad'",
+                  'git commit -m "do pip install x"',
+                  "grep 'pip install' req.txt",
+                  'python -c "print(1)"',
+                  "sh setup.sh"):
+            with self.subTest(cmd=c):
+                r = self.check(ev("Bash", command=c))
+                self.assertTrue(r["allowed"], c)
+
+    def test_allow_heredoc(self):
+        cmd = "cat <<EOF\npip install x\nEOF"
+        r = self.check(ev("Bash", command=cmd))
+        self.assertTrue(r["allowed"])
+
+    def test_chained_install_still_caught(self):
+        r = self.check(ev("Bash", command="echo hi && pip install x"))
+        self.assertFalse(r["allowed"])
+        self.assertEqual(r["rule"], "host_install")
+
+
+class TestRmTmpFH(EnvScrub):
+    """Wave FH-4: cho phep xoa trong tmp he thong; van chan nguy hiem."""
+
+    def test_allow_system_tmp(self):
+        for target in ("/tmp/x_task_dir",
+                       os.path.join(tempfile.gettempdir(), "x_task_dir")):
+            with self.subTest(target=target):
+                r = self.check(ev("Bash", command=f"rm -rf {target}"))
+                self.assertTrue(r["allowed"], target)
+
+    def test_allow_quoted_relative(self):
+        r = self.check(ev("Bash", command='rm -rf "build/cache"'))
+        self.assertTrue(r["allowed"])
+
+    def test_allow_absolute_inside_worktree(self):
+        target = os.path.join(self.cwd, "build", "cache")
+        r = self.check(ev("Bash", command=f"rm -rf {target}"))
+        self.assertTrue(r["allowed"])
+
+    def test_deny_dangerous(self):
+        parent = os.path.dirname(self.cwd.rstrip(os.sep))
+        cases = ["rm -rf /", "rm -rf ~", "rm -rf .", "rm -rf ..",
+                 "rm -rf *", "rm -rf ..", "rm -rf build/../..",
+                 "rm -rf /tmp", "rm -rf $OUTDIR",
+                 f"rm -rf {parent}",
+                 f"rm -rf {os.path.abspath(os.sep)}"]
+        for c in cases:
+            with self.subTest(cmd=c):
+                r = self.check(ev("Bash", command=c))
+                self.assertFalse(r["allowed"], c)
+                self.assertEqual(r["rule"], "destructive")
+
+
+class TestContextWriteFH(EnvScrub):
+    """Wave FH-6: context write cap role/owns tu plan.json."""
+
+    def _run(self, run_id="demo"):
+        run = os.path.join(self.tmp.name, "run")
+        os.makedirs(run)
+        plan = {"run_id": run_id, "title": "t", "tasks": [
+            {"id": "T1", "title": "m1", "role": "module-dev",
+             "owns": ["modules/m1"], "bugfix": False,
+             "change": "x", "acceptance": "y"},
+            {"id": "T2", "title": "fix", "role": "module-dev",
+             "owns": ["modules/m1"], "bugfix": True,
+             "change": "x", "acceptance": "y"},
+        ]}
+        with open(os.path.join(run, "plan.json"), "w",
+                  encoding="utf-8", newline="\n") as f:
+            json.dump(plan, f, ensure_ascii=False)
+        return run
+
+    def test_write_and_resolve_by_env(self):
+        run = self._run()
+        n, path = pg.context_write(run)
+        self.assertEqual(n, 2)
+        doc = json.load(open(path, encoding="utf-8"))
+        self.assertEqual(doc["tasks"]["T1"]["role"], "module-dev")
+        self.assertEqual(doc["tasks"]["T2"]["bugfix"], True)
+        os.environ["AI_PIPELINE_TASK"] = "T1"
+        ctx = pg.build_context(self.cwd, run)
+        self.assertEqual(ctx["role"], "module-dev")
+        self.assertEqual(ctx["owns"], ["modules/m1"])
+        self.assertFalse(ctx["bugfix"])
+        os.environ["AI_PIPELINE_TASK"] = "T2"
+        ctx = pg.build_context(self.cwd, run)
+        self.assertTrue(ctx["bugfix"])
+
+    def test_resolve_by_worktree_dirname(self):
+        run = self._run(run_id="demo")
+        pg.context_write(run)
+        wt = os.path.join(self.tmp.name, "demo-t1")
+        os.makedirs(wt, exist_ok=True)
+        ctx = pg.build_context(wt, run)
+        self.assertEqual(ctx["role"], "module-dev")
+
+    def test_unknown_task_fail_closed(self):
+        run = self._run()
+        pg.context_write(run)
+        os.environ["AI_PIPELINE_TASK"] = "NOPE"
+        ctx = pg.build_context(self.cwd, run)
+        self.assertEqual(ctx["role"], "")
+        r = pg.evaluate(ev("Read", file_path="seal_audit.jsonl"),
+                        fresh_policy(), ctx)
+        self.assertFalse(r["allowed"])
+
+    def test_legacy_context_shape(self):
+        run = self._run()
+        with open(os.path.join(run, "task_context.json"), "w",
+                  encoding="utf-8", newline="\n") as f:
+            json.dump({"role": "integrator"}, f)
+        ctx = pg.build_context(self.cwd, run)
+        self.assertEqual(ctx["role"], "integrator")
+
+    def test_no_event_role_spoof(self):
+        run = self._run()
+        pg.context_write(run)
+        os.environ["AI_PIPELINE_TASK"] = "T1"
+        ctx = pg.build_context(self.cwd, run)
+        e = ev("Read", file_path="seal_audit.jsonl", role="integrator")
+        r = pg.evaluate(e, fresh_policy(), ctx)
+        self.assertFalse(r["allowed"])
+
+    def test_plan_in_artifacts_fallback(self):
+        run = os.path.join(self.tmp.name, "run2")
+        adir = os.path.join(run, "artifacts", "A")
+        os.makedirs(adir)
+        with open(os.path.join(adir, "plan.json"), "w",
+                  encoding="utf-8", newline="\n") as f:
+            json.dump({"run_id": "r2", "tasks": [
+                {"id": "T9", "role": "integrator"}]}, f)
+        n, _ = pg.context_write(run)
+        self.assertEqual(n, 1)
+
+    def test_cli_context_write(self):
+        run = self._run()
+        rc = pg.main(["context", "write", run])
+        self.assertEqual(rc, 0)
+        self.assertTrue(os.path.isfile(os.path.join(run, "task_context.json")))
+        rc = pg.main(["context", "write", os.path.join(self.tmp.name, "nope")])
+        self.assertEqual(rc, 1)
 
 
 if __name__ == "__main__":
