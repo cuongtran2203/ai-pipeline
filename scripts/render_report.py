@@ -99,7 +99,7 @@ def render_md(d):
             md.append(f"| {md_cell(e['cluster'])} | {md_cell(rate)} | {md_cell(e.get('fields', 'N/A'))} | "
                       f"{md_cell(e.get('cause', 'N/A'))} | {md_cell(ex)} |\n")
     else:
-        md.append(f"{EMPTY_ERRORS_MSG}.\n")
+        md.append(f"Phân bố nhóm lỗi (0): {EMPTY_ERRORS_MSG}.\n")
     md.append("\n## 3. Kết luận\n\nGiải pháp theo thứ tự ưu tiên (mức ưu tiên → nhóm lỗi → cần làm gì → cách kiểm chứng):\n\n")
     for i, f in enumerate(c["fixes"], 1):
         md.append(f"{i}. **{f['priority']}** → {f['error']} → {f['fix']} → {f['measure']}\n")
