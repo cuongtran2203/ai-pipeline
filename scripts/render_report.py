@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Render eval JSON -> report.md (Vietnamese, 3 mandatory sections) + report.html (error clusters).
+"""Render eval JSON -> report.md (Vietnamese, 3 mandatory sections, markdown only) + report.html (error clusters).
 
 Usage: render_report.py eval.json [--out-dir DIR]
 Schema: see examples/eval.sample.json and templates/report.template.md.
@@ -33,44 +33,80 @@ def md_cell(value):
     return text.replace("\r\n", " ").replace("\n", " ").replace("\r", " ")
 
 
+def _num(x):
+    return x if isinstance(x, (int, float)) and not isinstance(x, bool) else None
+
+
+def _score(row, prefix=""):
+    """(value in %, 'đúng/tổng' text) for current (prefix='') or previous (prefix='prev_') of a row."""
+    if prefix == "":
+        c, t, v = row.get("correct"), row.get("total"), _num(row.get("value"))
+    else:
+        c, t, v = row.get("baseline_correct"), row.get("prev_total", row.get("total")), _num(row.get("prev_value"))
+    if _num(c) is not None and _num(t):
+        return 100 * c / t, f"{c}/{t}"
+    if v is not None:
+        return (100 * v if v <= 1 else v), None
+    return None, None
+
+
+def _fmt(val, frac):
+    if val is None:
+        return "N/A"
+    return f"{val:.1f}%" + (f" ({frac})" if frac else "")
+
+
 def render_md(d):
+    """Template: 1 Tổng quan · 2 Nội dung chi tiết (bảng chính xác + lỗi theo nhóm) · 3 Kết luận. Markdown only."""
     o, c = d["overview"], d["conclusion"]
     v = d.get("version", {})
     md = [f"# Báo cáo: {d['title']}\n",
-          f"Model `{v.get('model', '?')}` · Dataset `{v.get('dataset', '?')}` · Baseline `{d.get('baseline_name', '-')}`\n",
+          f"Model `{v.get('model', '?')}` · Dataset `{v.get('dataset', '?')}` · Version trước `{d.get('baseline_name', 'N/A')}`"
+          + (f" · {d['round']}" if d.get("round") else "") + "\n",
           "## 1. Tổng quan\n",
-          *( [bullet("Vòng thí nghiệm", d["round"])] if d.get("round") else [] ),
           bullet("Hiện trạng bài toán", o["status"]),
-          bullet("Thí nghiệm thế nào", o["method"]),
-          bullet("Giải quyết được vấn đề gì", o.get("solved") or "_(chưa ghi: vòng này chưa giải quyết được vấn đề nào hoặc người viết bỏ sót — điền `overview.solved`)_"),
-          bullet("Kết quả", o["result"]),
+          bullet("Phương pháp giải quyết", o["method"]),
+          bullet("Kết quả đạt được", o["result"]),
           "\n## 2. Nội dung chi tiết\n",
-          "### Bảng độ chính xác chi tiết từng thành phần\n"]
+          "### Bảng độ chính xác chi tiết\n",
+          "Mỗi hàng là một trường của một loại tài liệu. Cùng metric và cùng tập đánh giá khi so sánh; "
+          "nếu khác thì ghi rõ và không kết luận tăng/giảm. N/A = chưa có bằng chứng.\n\n"
+          "| Loại tài liệu | Trường | Metric | Số mẫu | Version trước | Version hiện tại | Thay đổi |\n|---|---|---|---|---|---|---|\n"]
     for tb in d["tables"]:
-        md.append(f"\n**{tb['name']}**\n\n| Thành phần | Đúng/Tổng | % | Baseline | Δ |\n|---|---|---|---|---|\n")
         for r in tb["rows"]:
-            b = r.get("baseline_correct")
-            delta = f"{100 * (r['correct'] / r['total'] - b / r['total']):+.1f}" if b is not None and r["total"] else "-"
-            md.append(f"| {md_cell(r['item'])} | {md_cell(r['correct'])}/{md_cell(r['total'])} "
-                      f"| {pct(r['correct'], r['total'])} | "
-                      f"{pct(b, r['total']) if b is not None else '-'} | {delta} |\n")
-    md.append("\n### Các lỗi sai còn tồn đọng\n")
+            metric = r.get("metric") or tb.get("metric") or "N/A"
+            n = r.get("n") or r.get("total") or tb.get("n") or "N/A"
+            cur, cur_f = _score(r)
+            prv, prv_f = _score(r, "prev_")
+            same = (not r.get("prev_metric") or r.get("prev_metric") == metric) and \
+                   (not r.get("prev_set") or r.get("prev_set") == tb.get("eval_set", r.get("prev_set")))
+            if cur is None or prv is None:
+                delta = "N/A"
+            elif not same:
+                delta = f"không so sánh trực tiếp (trước: {r.get('prev_metric') or ''} {r.get('prev_set') or ''})".strip()
+            else:
+                delta = f"{cur - prv:+.1f} điểm"
+            md.append(f"| {md_cell(tb['name'])} | {md_cell(r['item'])} | {md_cell(metric)} | {md_cell(n)} | "
+                      f"{md_cell(_fmt(prv, prv_f))} | {md_cell(_fmt(cur, cur_f))} | {md_cell(delta)} |\n")
+    md.append("\n### Phân tích lỗi theo nhóm\n\n")
     if d["errors"]:
-        md.append("\n| Nhóm lỗi | Số lượng | Ví dụ | Nguyên nhân / giả thuyết |\n|---|---|---|---|\n")
+        md.append("| Nhóm lỗi | Số lượng / tỷ lệ | Trường / loại tài liệu bị ảnh hưởng | Nguyên nhân có bằng chứng | Ví dụ tiêu biểu |\n|---|---|---|---|---|\n")
         for e in d["errors"]:
-            ex = "; ".join(x["where"] for x in e.get("examples", [])[:3])
-            md.append(f"| {md_cell(e['cluster'])} | {md_cell(e['count'])} | {md_cell(ex)} | {md_cell(e.get('cause', ''))} |\n")
+            den = e.get("denominator")
+            rate = f"{e['count']}/{den} = {100 * e['count'] / den:.1f}%" if _num(den) else f"{e['count']} (mẫu số: N/A)"
+            first = (e.get("examples") or [None])[0]
+            ex = e.get("example") or (first["where"] + (" — " + first["note"] if first.get("note") else "") if first else "")
+            md.append(f"| {md_cell(e['cluster'])} | {md_cell(rate)} | {md_cell(e.get('fields', 'N/A'))} | "
+                      f"{md_cell(e.get('cause', 'N/A'))} | {md_cell(ex)} |\n")
     else:
-        md.append(f"\n{EMPTY_ERRORS_MSG}\n")
-    md.append("\n## 3. Kết luận\n")
-    if d["errors"]:
-        md.append("\n**Lỗi sai còn tồn đọng:** " + "; ".join(f"{e['cluster']} ({e['count']})" for e in d["errors"]) + "\n")
-    else:
-        md.append(f"\n**Lỗi sai còn tồn đọng (tổng 0):** {EMPTY_ERRORS_MSG}\n")
-    md.append("\n| Lỗi | Giải pháp | Ưu tiên | Cách đo xác nhận |\n|---|---|---|---|\n")
-    for f in c["fixes"]:
-        md.append(f"| {md_cell(f['error'])} | {md_cell(f['fix'])} | {md_cell(f['priority'])} | {md_cell(f['measure'])} |\n")
-    md.append("\n" + bullet("Đề xuất dùng checkpoint/cấu hình mới", c["recommend"]))
+        md.append(f"{EMPTY_ERRORS_MSG}.\n")
+    md.append("\n## 3. Kết luận\n\nGiải pháp theo thứ tự ưu tiên (mức ưu tiên → nhóm lỗi → cần làm gì → cách kiểm chứng):\n\n")
+    for i, f in enumerate(c["fixes"], 1):
+        md.append(f"{i}. **{f['priority']}** → {f['error']} → {f['fix']} → {f['measure']}\n")
+    if c.get("recommend"):
+        md.append("\n" + bullet("Đề xuất dùng checkpoint/cấu hình mới", c["recommend"]))
+    if d.get("artifacts"):
+        md.append("\nArtifact kiểm chứng: " + "; ".join(f"[{a['label']}]({a['path']})" for a in d["artifacts"]) + "\n")
     return "".join(md)
 
 

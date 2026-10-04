@@ -6,14 +6,13 @@
   },
   "baseline_name": "rec-v0.1",
   "overview": {
-    "status": "Mục tiêu ≥95% field-level trên bộ real 60 trang; baseline rec-v0.1 đạt 88%. Nhãn real giới hạn 60 trang.",
-    "method": "Data: 12k synth + 60 real (tỉ lệ 90/10, val real riêng 30). Model khởi tạo từ checkpoint rec-v0.1, thêm augmentation nhiễu in mờ.",
-    "result": "Field-level 92.4% so với 88.0% baseline: tốt hơn, chưa đạt mục tiêu.",
-    "solved": "Giảm lỗi giờ bắt đầu/ngày nhờ augmentation in mờ (+5 điểm mỗi field); chưa giải quyết lỗi nhầm 0/O ở mã NV (cần font synth)."
+    "status": "Version trước rec-v0.1 đạt exact match từng trường như bảng dưới trên val real 60 trang (cùng tập với version này). Issue đang xử lý: giờ bắt đầu và ngày hay sai khi in mờ; mã NV nhầm 0/O.",
+    "method": "Giờ bắt đầu/ngày: thêm augmentation nhiễu in mờ vào train (12k synth + 60 real, 90/10). Mã NV: chưa xử lý trong vòng này (chờ font dot-matrix cho synth). Cách đánh giá giữ nguyên.",
+    "result": "Ngày +5.0 và Giờ bắt đầu +5.0 điểm exact match, Mã NV +1.7 điểm (trong sai số, n=60). Còn tồn tại: nhầm 0/O ở mã NV, giờ nghỉ bị cắt nét. Giờ kết thúc: chưa đánh giá."
   },
   "tables": [
     {
-      "name": "End-to-end theo field",
+      "name": "Phiếu chấm công (KIE)",
       "rows": [
         {
           "item": "Ngày",
@@ -32,8 +31,13 @@
           "correct": 54,
           "total": 60,
           "baseline_correct": 53
+        },
+        {
+          "item": "Giờ kết thúc"
         }
-      ]
+      ],
+      "metric": "exact match (accuracy)",
+      "eval_set": "val real 60 trang"
     }
   ],
   "errors": [
@@ -46,7 +50,10 @@
           "where": "trang 12, dòng 3",
           "note": "O đọc thành 0"
         }
-      ]
+      ],
+      "denominator": 60,
+      "fields": "Mã NV",
+      "example": "trang 12, dòng 3 — O đọc thành 0"
     },
     {
       "cluster": "Giờ nghỉ bị cắt nét",
@@ -56,7 +63,10 @@
         {
           "where": "trang 31, dòng 7"
         }
-      ]
+      ],
+      "denominator": 60,
+      "fields": "Giờ nghỉ",
+      "example": "trang 31, dòng 7"
     }
   ],
   "conclusion": {
@@ -76,5 +86,10 @@
     ],
     "recommend": "Chưa nên thay checkpoint production; giữ rec-v0.1 cho tới khi Mã NV ≥ 96%."
   },
-  "round": "Vòng 1 — fine-tune rec với augmentation nhiễu in mờ"
+  "artifacts": [
+    {
+      "label": "eval.json",
+      "path": "eval.sample.json"
+    }
+  ]
 }
