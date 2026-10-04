@@ -26,6 +26,9 @@ Rules from the Orca guide that matter here: a timeout/empty wait is a checkpoint
 - A probe/train/build worker runs in its own worktree; the integrator merges its branch into master; remove merged worktrees afterwards with `orca worktree rm --worktree branch:<name>`.
 - A worker agent not known to Orca (e.g. commandcode) cannot be supervised: use a recognised `--agent`, or drive its terminal manually and confirm by output files.
 
+## Close and delete reviewed branches
+After a worker is settled (`worker_done` succeeded, `task_id` in `done.json`) the orchestrator **reviews** it: acceptance line met, `git diff master...<branch> --stat` shows only owned paths, no secrets/binaries/data/checkpoints, tests/parity evidence present. If the review finds nothing wrong, **close and delete the branch**: `python scripts/branch_cleanup.py runs/<id>` (dry run) then `... --apply --reviewed <TASK_IDS>`. The script merges new tracked paths (`--no-ff`), restores ignored files into the run dir, tags unmerged tips as `archive/<branch>`, then `orca worktree rm` (no `--force`) and deletes the branch; it refuses on a dirty worktree, a task not in `done.json`, or a dirty master. If the review finds a problem: keep the branch, send the worker feedback or retry; never delete it.
+
 ## Gates
 `kind: "gate"` tasks are never workers. When `--start-ready` prints `GATE <id> ready`: ask the human, write the answer to `decisions.md`, add the id to `done.json`. Workers that need a human decision mid-task use the `ask` command from their preamble; relay to the human and `reply`.
 

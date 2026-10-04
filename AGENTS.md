@@ -5,6 +5,9 @@ This repo is a multi-agent workflow: **spec file in → plan + parallel executio
 ## Start
 User says "run ai-pipeline on <spec>" → use skill `ai-pipeline` (`skills/ai-pipeline/SKILL.md`; mirrored in `.claude/skills` and `.agents/skills`). Edit only `skills/`, then `python scripts/sync_skills.py`.
 
+## Đóng nhánh sau khi review
+Khi một nhánh/worktree của worker đã done và orchestrator review (worker_done succeeded + acceptance + diff chỉ gồm file thuộc phạm vi, không có secrets/binary/dữ liệu) không thấy vấn đề → ĐÓNG và XÓA nhánh đó bằng `python scripts/branch_cleanup.py runs/<id> --apply --reviewed <TASK_IDS>` (xem dry-run trước). Không bao giờ xóa mất công việc: nhánh chưa merge thì merge `--no-ff` (new path) hoặc khôi phục file vào run dir; nhánh có commit chưa merge được lưu bằng tag `archive/<branch>` trước khi xóa; từ chối nếu task chưa trong done.json, worktree còn thay đổi chưa commit, hoặc master có thay đổi tracked chưa commit. Có vấn đề khi review → giữ nhánh, sửa/retry, không xóa.
+
 ## Chọn agent trước khi chạy song song
 Trước khi dùng worker song song: dùng Orca runtime kiểm tra agent nào khả dụng (`python scripts/agent_roster.py detect`), cho người dùng chọn 1 orchestrator + các worker (code, debate — debate dùng ≥2 agent khác nhau), ghi `runs/<id>/agents.json` (`agent_roster.py select`, skill `ai-pipeline-agents`). `plan_to_orca.py` từ chối tạo/chạy worker khi thiếu `agents.json`. Agent Orca không giám sát được (vd. commandcode) không dùng làm worker.
 
