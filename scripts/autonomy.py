@@ -17,7 +17,8 @@ CLI:
   autonomy.py log <run_dir> --event start --scope T3 --decision started --reason "..." [--actor X]
 
 API cho plan_to_orca / coordinator:
-  from autonomy import load_policy, read_usage, check_action, append_audit
+  from autonomy import policy_status, read_usage_strict, check_action, append_audit,
+      derive_tasks_started, read_admission, read_started_map
 
 Stdlib only.
 """
@@ -28,6 +29,18 @@ import json
 import os
 import re
 import sys
+import uuid
+
+if sys.stdout.encoding != "utf-8":
+    sys.stdout.reconfigure(encoding="utf-8")
+if sys.stderr.encoding != "utf-8":
+    sys.stderr.reconfigure(encoding="utf-8")
+
+try:
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import statefile as statefile_mod
+except ImportError:  # pragma: no cover - scripts/ luon di kem
+    statefile_mod = None
 
 if sys.stdout.encoding != "utf-8":
     sys.stdout.reconfigure(encoding="utf-8")
@@ -64,13 +77,50 @@ def policy_path(run_dir, override=None):
 
 
 def load_policy(run_dir, override=None):
-    """Doc policy; None neu run chua co policy (tuong thich nguoc: run cu van chay)."""
+    """Doc policy; None neu run chua co policy (tuong thich nguoc: run cu van chay).
+
+    Giu nguyen chu ky vi project_status/supervisor dung de hien thi (read-only).
+    Duong start (plan_to_orca --start-ready) KHONG dung ham nay ma dung
+    policy_status() de phan biet missing (cho phep + audit migration) voi
+    corrupt/invalid (fail-closed: dung start).
+    """
     p = policy_path(run_dir, override)
     try:
         with open(p, encoding="utf-8-sig") as f:  # -sig: chiu duoc BOM do PowerShell ghi
             return json.load(f)
     except (OSError, ValueError):
         return None
+
+
+def policy_status(run_dir, override=None):
+    """Phan biet trang thai policy cho duong start (fail-closed).
+
+    Tra ve (status, policy, errors) voi status thuoc:
+      missing - khong co file (run cu) -> cho phep + canh bao + audit migration
+      ok      - hop le -> check cap binh thuong
+      corrupt - file co nhung doc/parse loi -> DUNG start, exit != 0
+      invalid - parse duoc nhung validate loi -> DUNG start, exit != 0
+    File rong duoc coi nhu missing (cung contract voi statefile._read_strict).
+    """
+    p = policy_path(run_dir, override)
+    try:
+        with open(p, encoding="utf-8-sig") as f:
+            text = f.read()
+    except FileNotFoundError:
+        return "missing", None, []
+    except OSError as e:
+        return "corrupt", None, [f"khong doc duoc policy {p}: {e}"]
+    if not text.strip():
+        return "missing", None, []
+    try:
+        pol = json.loads(text)
+    except ValueError as e:
+        return "corrupt", None, [f"autonomy_policy.json khong phai JSON hop le ({e}); "
+                                 "sua/xoa tay hoac khoi phuc ban sao, KHONG tu ghi de"]
+    errs = validate_policy(pol)
+    if errs:
+        return "invalid", pol, errs
+    return "ok", pol, []
 
 
 def validate_policy(p):
@@ -107,6 +157,9 @@ def validate_policy(p):
 def read_usage(run_dir, override=None):
     """Doc bo dem tich luy runs/<id>/usage.json; thieu file thi coi nhu {} (chua biet).
 
+    Giu nguyen hanh vi hien thi (lenient) cho project_status/supervisor (read-only).
+    Duong start dung read_usage_strict(): file hong -> StateCorrupt (dung, khong ghi de).
+
     Phan biet 'chua biet' voi 0: file/khoa vang khong co nghia la da do duoc 0.
     check_action() bao 'usage unknown' cho cap tien/token/GPU khong co nguon do
     thay vi lang le cho qua.
@@ -120,29 +173,126 @@ def read_usage(run_dir, override=None):
         return {}
 
 
-def write_usage(run_dir, usage, override=None):
-    """Ghi usage.json kieu atomic (temp roi replace) de khong mat so lieu khi crash."""
+def read_usage_strict(run_dir, override=None):
+    """Doc usage.json cho duong start: hong -> StateCorrupt (KHONG ghi de, dung start).
+
+    Thieu file/rong -> {} (chua start gi). JSON khong phai object -> {} (tuong thich).
+    """
     p = override or os.path.join(run_dir, USAGE_FILE)
-    os.makedirs(os.path.dirname(os.path.abspath(p)), exist_ok=True)
-    tmp = p + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(usage, f, indent=2, ensure_ascii=False)
-    os.replace(tmp, p)
-    return usage
+    try:
+        with open(p, encoding="utf-8-sig") as f:
+            text = f.read()
+    except FileNotFoundError:
+        return {}
+    if not text.strip():
+        return {}
+    try:
+        u = json.loads(text)
+    except ValueError as e:
+        raise statefile_mod.StateCorrupt(
+            f"{p} khong phai JSON hop le ({e}); khong ghi de. "
+            "Sua/xoa tay hoac khoi phuc ban sao.") from e
+    return u if isinstance(u, dict) else {}
+
+
+def write_usage(run_dir, usage, override=None):
+    """Ghi usage.json qua statefile (khoa + atomic temp/replace).
+
+    File hong -> StateCorrupt, KHONG bao gio ghi de im lang (fail-closed).
+    """
+    p = override or os.path.join(run_dir, USAGE_FILE)
+    return statefile_mod.update_json(p, lambda _old: usage, default={})
 
 
 def reserve_task_quota(run_dir, n=1, usage=None, override=None):
-    """Cong don tasks_started ngay vao usage.json ben vung (atomic).
+    """Cong don tasks_started ngay vao usage.json (atomic, qua statefile).
 
-    plan_to_orca --start-ready goi ham nay cho TUNG worker duoc duyet TRUOC KHI
-    start worker do, nen vong check ke tiep trong cung wave thay so lieu moi
-    (cap 1/wave 2 -> worker 2 bi tu choi). Crash giua reserve va start co the
-    de lai quota da tru trong khi worker chua chay: coordinator tru lai
-    (reserve -1) hoac sua usage.json thu cong truoc khi retry.
+    Giu lai de tuong thich (test/unit cu); duong start moi (plan_to_orca
+    --start-ready) KHONG dung ham nay nua ma suy tasks_started tu
+    admission/started (derive_tasks_started) theo tung task ID.
+    File hong -> StateCorrupt (khong ghi de).
     """
     u = dict(usage) if usage is not None else read_usage(run_dir, override)
     u["tasks_started"] = (u.get("tasks_started") or 0) + n
     return write_usage(run_dir, u, override)
+
+
+# --- Admission + started (nguon su that cho quota, doc ca dang cu) ---
+
+ADMISSION_FILE = "admission.json"
+# Trang thai giu quota (duoc dem vao tasks_started); "failed" la da giai phong.
+ADMISSION_ACTIVE = ("reserved", "starting", "started")
+
+
+def admission_path(run_dir):
+    return os.path.join(run_dir, ADMISSION_FILE)
+
+
+def read_started_map(run_dir):
+    """started.json dang dict (moi) hoac list (cu) -> dict {task_id: receipt}.
+
+    Thieu/rong -> {}. Hong hoac khong phai dict/list -> StateCorrupt
+    (dung, KHONG ghi de).
+    """
+    p = os.path.join(run_dir, "started.json")
+    try:
+        with open(p, encoding="utf-8-sig") as f:
+            text = f.read()
+    except FileNotFoundError:
+        return {}
+    if not text.strip():
+        return {}
+    try:
+        raw = json.loads(text)
+    except ValueError as e:
+        raise statefile_mod.StateCorrupt(
+            f"{p} khong phai JSON hop le ({e}); khong ghi de. "
+            "Sua/xoa tay hoac khoi phuc ban sao.") from e
+    if isinstance(raw, dict):
+        return dict(raw)
+    if isinstance(raw, list):
+        return {tid: True for tid in raw}
+    raise statefile_mod.StateCorrupt(
+        f"{p} phai la object (moi) hoac list (cu), got {type(raw).__name__}; khong ghi de.")
+
+
+def read_admission(run_dir):
+    """Doc admission.json: thieu/rong -> {}; hong -> StateCorrupt (khong ghi de)."""
+    p = admission_path(run_dir)
+    try:
+        with open(p, encoding="utf-8-sig") as f:
+            text = f.read()
+    except FileNotFoundError:
+        return {}
+    if not text.strip():
+        return {}
+    try:
+        adm = json.loads(text)
+    except ValueError as e:
+        raise statefile_mod.StateCorrupt(
+            f"{p} khong phai JSON hop le ({e}); khong ghi de. "
+            "Sua/xoa tay hoac khoi phuc ban sao.") from e
+    if not isinstance(adm, dict):
+        raise statefile_mod.StateCorrupt(f"{p} phai la object, got {type(adm).__name__}; khong ghi de.")
+    return adm
+
+
+def derive_tasks_started(run_dir):
+    """Suy tasks_started tu admission (reserved/starting/started).
+
+    Thay cho cong thu cong: quota duoc giai phong khi task -> failed,
+    nen so lieu khong bao gio treo sau start loi. Gate (G1/G2/G3...) khong
+    bao gio vao admission nen khong bi dem. Key started.json chi duoc dem
+    khi co ban ghi admission mirror (worker start qua admission luon co);
+    key started mo coi (plan doi, task mat) khong dem - huong fail-closed
+    that (thieu hon thua) thi chay --reconcile de nhap lai.
+    """
+    adm = read_admission(run_dir)
+    active = {tid for tid, rec in adm.items()
+              if isinstance(rec, dict) and rec.get("state") in ADMISSION_ACTIVE}
+    started = read_started_map(run_dir)  # hong -> StateCorrupt (fail-closed, khong dem bay)
+    mirrored = {tid for tid in started if tid in adm}
+    return len(active | mirrored)
 
 
 def mode_of(policy, phase):
@@ -202,91 +352,88 @@ def audit_path(run_dir):
 
 def append_audit(run_dir, event, actor="person:coordinator", scope="", decision="",
                  reason="", refs=None, policy_version=None, extra=None):
-    """Ghi 1 dong append-only vao audit.jsonl. Khong bao gio ghi de/sua lich su."""
+    """Ghi 1 dong append-only vao audit.jsonl (qua statefile). Khong bao gio ghi de/sua lich su.
+
+    Moi ban ghi co "id" UUID duy nhat: ID KG dan xuat tu audit id nen
+    2 audit cung event/scope trong 1 phut khong tao canh lap, va sync lai
+    cung ban ghi la idempotent (add_edge_checked dedup theo source/target/type).
+    Dong bo KG loi -> ghi ban ghi "kg_sync_pending" truc tiep (khong de quy),
+    KHONG lam hong audit.
+    """
     if policy_version is None:
         p = load_policy(run_dir)
         policy_version = (p or {}).get("policy_version", "-")
-    rec = {"ts": utcnow(), "actor": actor, "event": event, "scope": scope,
+    rec = {"id": uuid.uuid4().hex, "ts": utcnow(), "actor": actor, "event": event, "scope": scope,
            "policy_version": policy_version, "decision": decision,
            "reason": reason, "refs": refs or []}
     if extra:
         rec.update(extra)
     os.makedirs(os.path.abspath(run_dir), exist_ok=True)
-    with open(audit_path(run_dir), "a", encoding="utf-8") as f:
-        f.write(json.dumps(rec, ensure_ascii=False) + "\n")
-    audit_to_kg(run_dir, rec)
+    statefile_mod.append_jsonl(audit_path(run_dir), rec)
+    try:
+        audit_to_kg(run_dir, rec)
+    except Exception as e:  # KG loi: ghi pending sync, audit van nguyen ven
+        try:
+            statefile_mod.append_jsonl(audit_path(run_dir), {
+                "id": uuid.uuid4().hex, "ts": utcnow(), "actor": actor,
+                "event": "kg_sync_pending", "scope": scope,
+                "policy_version": policy_version, "decision": "pending",
+                "reason": f"KG sync loi, can reconcile: {e}",
+                "refs": [rec["id"]]})
+        except Exception:
+            pass
     return rec
 
 
-# --- Noi audit -> KG (canh approved_by / decided_by, dung truc tiep file jsonl) ---
-
-def _kg_paths(run_dir):
-    d = os.path.join(os.path.abspath(run_dir), "knowledge")
-    return os.path.join(d, "entities.jsonl"), os.path.join(d, "edges.jsonl")
-
-
-def _kg_ids(run_dir):
-    ids = {}
-    p, _ = _kg_paths(run_dir)
-    try:
-        with open(p, encoding="utf-8-sig") as f:
-            for line in f:
-                try:
-                    r = json.loads(line)
-                    if r.get("id"):
-                        ids[r["id"]] = r.get("type")
-                except ValueError:
-                    pass
-    except OSError:
-        pass
-    return ids
-
+# --- Noi audit -> KG (canh approved_by / decided_by, QUA API scripts/kg.py) ---
 
 def audit_to_kg(run_dir, rec):
-    """Noi event audit thanh canh KG. Chi emit khi knowledge/ ton tai; khong bao gio fail."""
-    try:
-        kd = os.path.join(os.path.abspath(run_dir), "knowledge")
-        if not os.path.isdir(kd):
-            return
-        ev, scope = rec.get("event", ""), rec.get("scope", "")
-        if ev in ("heartbeat",):
-            return
-        actor = rec.get("actor", "person:coordinator")
-        ver = rec.get("policy_version", "-")
-        stamp = slug(rec.get("ts", "")[:16])
-        did = f"decision:{ev}-{slug(scope) or 'run'}-{stamp}"
-        pid = f"policy:autonomy-{slug(ver)}"
-        ep, dp = _kg_paths(run_dir)
-        have = _kg_ids(run_dir)
-        now = rec.get("ts", "")[:16].replace("T", " ")
+    """Noi event audit thanh canh KG qua upsert_entity/add_edge_checked.
 
-        def ensure(eid, etype, title):
-            if eid not in have:
-                with open(ep, "a", encoding="utf-8") as f:
-                    f.write(json.dumps({"id": eid, "type": etype, "title": title, "body": rec.get("reason", ""),
-                                                "properties": {"audit_ts": rec.get("ts"), "scope": scope},
-                                                "created_at": now}, ensure_ascii=False) + "\n")
-                have[eid] = etype
-
-        ensure(actor if actor.startswith("person:") else f"person:{slug(actor)}", "Person", actor)
-        person_id = actor if actor.startswith("person:") else f"person:{slug(actor)}"
-        ensure(did, "Decision", f"{ev}: {scope} ({rec.get('decision', '')})")
-        ensure(pid, "Policy", f"Autonomy policy {ver}")
-        edge_type = "approved_by" if ev in APPROVAL_EVENTS else "decided_by"
-        with open(dp, "a", encoding="utf-8") as f:
-            f.write(json.dumps({"source": did, "target": person_id, "type": edge_type,
-                                        "valid_from": now or None, "valid_to": None,
-                                        "recorded_at": now or None,
-                                        "source_ref": AUDIT_FILE, "confidence": 1.0,
-                                        "properties": {"event": ev, "decision": rec.get("decision", "")}},
-                                       ensure_ascii=False) + "\n")
-            f.write(json.dumps({"source": did, "target": pid, "type": "uses",
-                                        "valid_from": now or None, "valid_to": None,
-                                        "recorded_at": now or None,
-                                        "source_ref": AUDIT_FILE, "confidence": 1.0,
-                                        "properties": {"event": ev}}, ensure_ascii=False) + "\n")
-    except OSError:
-        pass
+    Chi emit khi knowledge/ ton tai; heartbeat va kg_sync_pending khong emit
+    (tranh vong lap). Loi (KG fail, endpoint sai kieu...) duoc nem ra de
+    append_audit ghi ban ghi kg_sync_pending; KHONG append thang vao
+    entities/edges.jsonl (di qua validation + idempotency cua KG API).
+    Khoa KG va audit KHONG long nhau: audit da commit (append_jsonl tra ve)
+    truoc khi goi ham nay; KG API tu quan ly ghi cua no.
+    """
+    kd = os.path.join(os.path.abspath(run_dir), "knowledge")
+    if not os.path.isdir(kd):
+        return
+    ev, scope = rec.get("event", ""), rec.get("scope", "")
+    if ev in ("heartbeat", "kg_sync_pending"):
+        return
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import kg as kg_mod
+    actor = rec.get("actor", "person:coordinator")
+    ver = rec.get("policy_version", "-")
+    aid = rec.get("id") or slug(rec.get("ts", ""))
+    did = f"decision:{ev}-{slug(scope) or 'run'}-{aid[:12]}"
+    pid = f"policy:autonomy-{slug(ver)}"
+    person_id = actor if actor.startswith("person:") else f"person:{slug(actor)}"
+    now = rec.get("ts", "")[:16].replace("T", " ")
+    kg_mod.upsert_entity(run_dir, person_id, "Person", actor,
+                         body=rec.get("reason", ""),
+                         properties={"audit_ts": rec.get("ts"), "scope": scope},
+                         created_at=now or None)
+    kg_mod.upsert_entity(run_dir, did, "Decision",
+                         f"{ev}: {scope} ({rec.get('decision', '')})",
+                         body=rec.get("reason", ""),
+                         properties={"audit_ts": rec.get("ts"), "scope": scope,
+                                     "audit_id": rec.get("id")},
+                         created_at=now or None)
+    kg_mod.upsert_entity(run_dir, pid, "Policy", f"Autonomy policy {ver}",
+                         body="", properties={}, created_at=now or None)
+    edge_type = "approved_by" if ev in APPROVAL_EVENTS else "decided_by"
+    kg_mod.add_edge_checked(run_dir, did, person_id, edge_type,
+                            valid_from=now or None, recorded_at=now or None,
+                            source_ref=AUDIT_FILE, confidence=1.0,
+                            properties={"event": ev, "decision": rec.get("decision", ""),
+                                        "audit_id": rec.get("id")})
+    kg_mod.add_edge_checked(run_dir, did, pid, "uses",
+                            valid_from=now or None, recorded_at=now or None,
+                            source_ref=AUDIT_FILE, confidence=1.0,
+                            properties={"event": ev, "audit_id": rec.get("id")})
 
 
 def main():
@@ -339,14 +486,16 @@ def main():
         return 0
 
     if a.cmd == "check":
-        pol = load_policy(a.run_dir, a.policy)
-        if pol is None:
+        status, pol, perrs = policy_status(a.run_dir, a.policy)
+        if status == "missing":
             print("khong co autonomy_policy.json: cho phep (tuong thich nguoc run cu)")
             return 0
-        errs = validate_policy(pol)
-        if errs:
-            sys.exit("policy error: " + "; ".join(errs))
-        usage = read_usage(a.run_dir, a.usage_file)
+        if status in ("corrupt", "invalid"):
+            sys.exit("policy error (fail-closed, dung truoc start): " + "; ".join(perrs))
+        try:
+            usage = read_usage_strict(a.run_dir, a.usage_file)
+        except Exception as e:
+            sys.exit(f"usage error (fail-closed): {e}")
         ok, reason, warns = check_action(pol, a.action, a.phase, usage, a.approved)
         for w in warns:
             print(f"canh bao: {w}")

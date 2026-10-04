@@ -177,16 +177,33 @@ class TestStartReadyWave(unittest.TestCase):
             self.assertEqual(code, 0, f"khong policy phai chay, out={out}")
             self.assertEqual(len(calls), 2)
 
-    def test_policy_hong_canh_bao_nhung_van_chay(self):
+    def test_policy_hong_dung_start_fail_closed(self):
+        # RV3: file policy CO nhung parse loi -> DUNG start (fail-closed),
+        # khong con "canh bao nhung van chay". Audit start_denied ly do corrupt.
         with tempfile.TemporaryDirectory() as tmp:
             run_dir = make_run_dir(tmp, make_wave_plan(),
                                    policy={"sai": "cau truc"})
             calls = []
             code, out = run_start_ready(
                 os.path.join(run_dir, "plan.json"), run_dir, calls)
-            self.assertEqual(code, 0, f"policy hong van chay, out={out}")
-            self.assertEqual(len(calls), 2)
-            self.assertIn("canh bao policy", out)
+            self.assertNotEqual(code, 0, f"policy invalid phai DUNG start, out={out}")
+            self.assertEqual(len(calls), 0)
+            denied = [e for e in audit_events(run_dir)
+                      if e["event"] == "start_denied"]
+            self.assertTrue(denied, "policy hong phai ghi audit start_denied")
+
+    def test_policy_json_vo_dung_start_fail_closed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run_dir = make_run_dir(tmp, make_wave_plan(), policy=None)
+            with open(os.path.join(run_dir, "autonomy_policy.json"),
+                      "w", encoding="utf-8") as f:
+                f.write('{"caps": ')
+            calls = []
+            code, out = run_start_ready(
+                os.path.join(run_dir, "plan.json"), run_dir, calls)
+            self.assertNotEqual(code, 0, f"policy corrupt phai DUNG start, out={out}")
+            self.assertEqual(len(calls), 0)
+            self.assertIn("corrupt", out)
 
 
 if __name__ == "__main__":
