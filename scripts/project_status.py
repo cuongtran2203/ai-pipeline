@@ -31,6 +31,26 @@ def task_mode(t):
     return None
 
 
+try:
+    sys.path.insert(0, os.path.join(ROOT, "scripts"))
+    from plan_to_orca import needs_g3 as _plan_needs_g3
+except ImportError:  # chay doc lap: fallback cung ngu nghia
+    _plan_needs_g3 = None
+
+
+def task_needs_g3(t):
+    """Task co can gate G3 (GPU/server) khong: dung chung helper voi plan_to_orca.
+
+    Can G3 khi mode=train HOAC resources.compute=gpu (ke ca evaluate-only tren
+    GPU). CPU-only khong can G3.
+    """
+    if _plan_needs_g3 is not None:
+        return bool(_plan_needs_g3(t))
+    if task_mode(t) == "train":
+        return True
+    return (t.get("resources") or {}).get("compute") == "gpu"
+
+
 def newest_run():
     runs = [d for d in glob.glob(os.path.join(ROOT, "runs", "*")) if os.path.isdir(d)]
     return max(runs, key=os.path.getmtime) if runs else None
@@ -118,7 +138,7 @@ def assess(run_dir):
     ev["build_plan"] = bool(plan)
     ev["G2"], ev["G3"] = "G2" in done, "G3" in done
     plan_tasks = jload(plan, {}).get("tasks", []) if plan else []
-    ev["has_train"] = any(t.get("kind", "worker") == "worker" and task_mode(t) == "train" for t in plan_tasks)
+    ev["has_train"] = any(t.get("kind", "worker") == "worker" and task_needs_g3(t) for t in plan_tasks)
     ev["report_lang"] = jload(plan, {}).get("report_lang", "vi") if plan else "vi"
 
     mods = sorted(d for d in glob.glob(os.path.join(run_dir, "modules", "*")) if os.path.isdir(d))
@@ -179,10 +199,10 @@ def assess(run_dir):
     elif not all(mod_state.get(m) for m in (planned_modules or mod_state)) or not mod_state:
         phase = 3
         if ev["has_train"] and not ev["G3"]:
-            actions.append("Gate G3: xin thông tin GPU server / loại GPU / CUDA / framework trước khi train")
+            actions.append("Gate G3: xin thông tin GPU server / loại GPU / CUDA / framework trước khi train/dùng GPU")
             blocked.append("G3")
         elif not ev["has_train"]:
-            actions.append("Plan không có task train (mode evaluate/retrieve/serve/monitor): không cần G3, chạy trên CPU/container thường")
+            actions.append("Plan không có task train/GPU (mode train hoặc compute gpu): không cần G3, chạy trên CPU/container thường")
         for m in (planned_modules or list(mod_state)):
             if not mod_state.get(m):
                 actions.append(f"Module '{m}' chưa đủ eval.json + report.md + report.html → chạy/tiếp tục module-dev (worktree riêng)")

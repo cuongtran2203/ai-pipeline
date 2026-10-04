@@ -92,8 +92,15 @@ def effective_mode(t):
 
 
 def needs_g3(t):
-    """Chỉ task train mới cần gate G3 (GPU/server). Các mode còn lại chạy CPU/container thường được."""
-    return effective_mode(t) == "train"
+    """Task can gate G3 (thong tin GPU/server) khi train HOAC can compute GPU.
+
+    Moi gia tri compute thuoc nhom GPU trong schemas/plan.schema.json (hien chi
+    co "gpu") deu can G3, ke ca mode evaluate-only/inference-service. CPU-only
+    chay container thuong, khong can G3.
+    """
+    if effective_mode(t) == "train":
+        return True
+    return (t.get("resources") or {}).get("compute") == "gpu"
 
 
 def is_train_task(t):
@@ -137,7 +144,8 @@ GROUP_OF = GROUP_OF_FALLBACK
 def load_roster(run_dir):
     p = os.path.join(run_dir, "agents.json")
     try:
-        return json.load(open(p, encoding="utf-8"))
+        with open(p, encoding="utf-8") as f:
+            return json.load(f)
     except (OSError, ValueError):
         return None
 
@@ -210,12 +218,16 @@ def validate_plan(plan):
     trains = [t for t in tasks if t.get("kind", "worker") == "worker" and needs_g3(t)]
     builds = [t for t in tasks if t.get("kind", "worker") == "worker" and is_build_task(t)]
     if trains and "G3" not in gates:
-        sys.exit("plan error: plan has train task(s) but no gate G3 (GPU info required before training)")
+        sys.exit("plan error: plan has train/GPU task(s) (mode=train hoac resources.compute=gpu) "
+                 "but no gate G3 (thong tin GPU/server can truoc khi dung GPU)")
     if builds and "G2" not in gates:
         sys.exit("plan error: plan has build/train task(s) but no gate G2 (plan approval required)")
     for t in trains:
         if "G3" not in ancestors(t["id"], by_id):
-            sys.exit(f"plan error: train task {t['id']} must have a dependency path to gate G3")
+            mode = effective_mode(t) or "-"
+            comp = (t.get("resources") or {}).get("compute", "-")
+            sys.exit(f"plan error: task {t['id']} (mode={mode}, compute={comp}) can GPU/server: "
+                     f"phai co duong phu thuoc toi gate G3")
     for t in builds:
         if "G2" not in ancestors(t["id"], by_id):
             sys.exit(f"plan error: build/train task {t['id']} must have a dependency path to gate G2")
@@ -253,7 +265,9 @@ def build_spec(plan, t, run_dir):
         bits = [t["mode"], "compute=" + res.get("compute", "cpu")]
         if res.get("container"):
             bits.append("container=" + res["container"])
-        if t["mode"] != "train":
+        if needs_g3(t):
+            bits.append("cần G3 (GPU/server)")
+        else:
             bits.append("không cần G3/GPU")
         mode_line = "Mode: " + ", ".join(bits)
     lang = plan.get("report_lang", "vi")
@@ -411,30 +425,40 @@ def main():
             print("nothing ready (mark finished tasks/gates in done.json)")
             return
         # Human-on-the-loop: kiem tra autonomy policy truoc khi start (T3).
-        # Khong co policy file -> cho phep (tuong thich nguoc run cu).
+        # Khong co policy file -> cho phep (tuong thich nguoc run cu), in ghi chu ro.
+        # Policy hong -> canh bao ro va van chay (tuong thich nguoc); sua policy
+        # truoc khi siet cap (`autonomy.py validate` de kiem tra chat).
         policy = autonomy_mod.load_policy(run_dir) if autonomy_mod else None
-        if policy is not None and autonomy_mod.validate_policy(policy):
-            sys.exit("policy error: " + "; ".join(autonomy_mod.validate_policy(policy)))
+        policy_errs = autonomy_mod.validate_policy(policy) if (autonomy_mod and policy is not None) else []
+        if policy is None:
+            print("note: khong co autonomy_policy.json: cho phep start (tuong thich nguoc run cu). "
+                  "Copy templates/autonomy_policy.template.json de bat cap/autonomy.")
+        elif policy_errs:
+            print("canh bao policy: autonomy_policy.json KHONG hop le: " + "; ".join(policy_errs) +
+                  " -- van cho phep start (tuong thich nguoc). Sua policy roi chay lai de bat cap.")
+            policy = None
         usage = autonomy_mod.read_usage(run_dir) if autonomy_mod else {}
-        blocked = []
-        for t in todo:
-            if t.get("kind", "worker") != "worker" or policy is None:
-                continue
-            ok, reason, warns = autonomy_mod.check_action(
-                policy, "start", autonomy_mod.phase_of_task(t), usage)
-            for w in warns:
-                print(f"canh bao policy ({t['id']}): {w}")
-            if not ok:
-                blocked.append((t["id"], reason))
-        if blocked:
-            for tid, reason in blocked:
-                print(f"TREO start {tid}: policy cam -- {reason}")
-                if autonomy_mod:
-                    autonomy_mod.append_audit(run_dir, "start_denied", scope=tid,
+        # Cap quota theo TUNG worker truoc khi start: worker duoc duyet cong
+        # tasks_started ngay vao usage.json (atomic), vong check ke tiep trong
+        # cung wave thay so lieu moi. Worker vuot cap -> audit start_denied.
+        allowed_ids, blocked = set(), []
+        if policy is not None:
+            for t in todo:
+                if t.get("kind", "worker") != "worker":
+                    continue
+                ok, reason, warns = autonomy_mod.check_action(
+                    policy, "start", autonomy_mod.phase_of_task(t), usage)
+                for w in warns:
+                    print(f"canh bao policy ({t['id']}): {w}")
+                if not ok:
+                    blocked.append((t["id"], reason))
+                    autonomy_mod.append_audit(run_dir, "start_denied", scope=t["id"],
                                               decision="denied", reason=reason)
-            sys.exit("policy: tu choi start %d task (%s). Can nguoi approve/doi policy "
-                     "(autonomy.py approve) roi chay lai --start-ready."
-                     % (len(blocked), ", ".join(t for t, _ in blocked)))
+                else:
+                    usage = autonomy_mod.reserve_task_quota(run_dir, 1, usage=usage)
+                    allowed_ids.add(t["id"])
+        else:
+            allowed_ids = {t["id"] for t in todo if t.get("kind", "worker") == "worker"}
         for t in todo:
             if t.get("kind", "worker") == "gate" and t["id"] in done:
                 started[t["id"]] = True  # gate already answered: nothing to ask
@@ -447,6 +471,8 @@ def main():
                 continue
             if t["id"] not in tmap:
                 sys.exit(f"plan error: {t['id']} has no Orca task id in task_map.json (run --create first)")
+            if t["id"] not in allowed_ids:
+                continue  # vuot cap: da ghi audit start_denied o vong admission, bao exit o cuoi
             receipt = run(worker_argv(t, tmap[t["id"]], a.agent, plan["run_id"]) + ["--run", tmap["_run"]])
             if isinstance(receipt, dict) and receipt.get("ok") is False:
                 sys.exit(f"worker start failed for {t['id']}: {json.dumps(receipt, ensure_ascii=False)}")
@@ -460,6 +486,12 @@ def main():
                                           reason=f"agent={t.get('agent', a.agent)} policy={policy.get('policy_version')}",
                                           refs=[tmap.get("_run", "")])
             print(f"started {t['id']} ({t.get('agent', a.agent)})")
+        if blocked:
+            for tid, reason in blocked:
+                print(f"TREO start {tid}: policy cam -- {reason}")
+            sys.exit("policy: tu choi start %d task (%s). Can nguoi approve/doi policy "
+                     "(autonomy.py approve) roi chay lai --start-ready."
+                     % (len(blocked), ", ".join(t for t, _ in blocked)))
         return
 
     # dry run (default): DAG description only — NOT directly runnable.
