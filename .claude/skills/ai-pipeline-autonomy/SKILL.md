@@ -36,12 +36,21 @@ python scripts/autonomy.py approve runs/<id> --scope M1 --decision approve --rea
 ```
 
 `check` exit 0 = được phép, 2 = bị cấm (lý do in ra). `plan_to_orca.py --start-ready`
-cấp quota theo từng worker trước khi start (cộng `tasks_started` ngay vào
-`usage.json`, ghi atomic temp+rồi replace): wave vượt cap chỉ start đúng số
-worker trong cap, worker còn lại bị từ chối (`audit start_denied`, exit ≠ 0).
+giữ quota theo từng worker qua `runs/<id>/admission.json` (trạng thái theo task ID
+`reserved → starting → started | failed`, ghi qua `statefile`):
+mỗi worker được check cap + reserve trong một khóa ngắn **ngay trước** lời gọi Orca
+(hai coordinator không cùng nhận quota), ghi `starting` trước call, có receipt thì
+chuyển `started` kèm dispatchId, lỗi rõ ràng thì `failed` (giải phóng quota),
+lỗi không rõ (mất receipt) thì GIỮ `starting` và phải `--reconcile` trước khi retry
+(không giải phóng quota theo suy đoán, không retry mù để tránh double-start).
+`usage.tasks_started` được suy từ admission/started, không cộng thủ công.
+Wave vượt cap chỉ start đúng số worker trong cap, worker còn lại bị từ chối
+(`audit start_denied`, exit ≠ 0).
 Cap tiền/token/GPU chưa có số đo thì báo `usage unknown` (coi như 0, cần nguồn
 đo/telemetry) thay vì lặng lẽ cho qua. Run chưa có policy vẫn chạy (tương thích
-ngược, có ghi chú); policy hỏng thì cảnh báo rõ và vẫn chạy.
+ngược, có cảnh báo + `audit policy_migration`); policy CÓ file nhưng hỏng/sai cấu trúc
+thì DỪNG start (fail-closed, exit ≠ 0, `audit start_denied`); `usage.json`/
+`admission.json` hỏng thì không bao giờ ghi đè mà dừng để người sửa tay.
 
 ## 2. Audit log (`audit.jsonl`, append-only)
 
@@ -52,8 +61,13 @@ Mọi `ask`/`answer`, gate G*, đổi roster/policy, start/stop/override/release
 python scripts/autonomy.py log runs/<id> --event gate --scope G2 --decision approved --reason "..."
 ```
 
-Chỉ append, không sửa/xóa lịch sử. Event approve/gate tự nối cạnh `approved_by` /
-`decided_by` vào `knowledge/` (lớp KG của `ai-pipeline-knowledge`).
+Chỉ append, không sửa/xóa lịch sử. Mỗi bản ghi có `id` UUID duy nhất; event
+approve/gate tự nối cạnh `approved_by` / `decided_by` vào `knowledge/` (lớp KG của
+`ai-pipeline-knowledge`) **qua API `scripts/kg.py`** (`upsert_entity` /
+`add_edge_checked`, có validation + idempotent nên hai audit cùng event/scope trong
+một phút không tạo cạnh lặp). KG lỗi thì ghi bản ghi `kg_sync_pending` vào audit
+để reconcile sau, không làm hỏng audit. `started.json` dạng list cũ được migrate
+sang dict (có backup `started.json.bak-<ts>`) khi `--start-ready`/`--reconcile` chạy.
 
 ## 3. Supervisor (`supervisor.py`: chỉ đọc + thông báo)
 
