@@ -300,19 +300,38 @@ class TestCorruptPolicy(EnvScrub):
         self.assertTrue(ok)
 
     def test_corrupt_fail_closed_for_docker(self):
+        # P3 FH2: policy hong -> Bash bi policy_config deny (fail-closed nhom
+        # ghi), ke ca lenh docker nguy hiem (van deny, rule config di truoc).
         pol = self._broken()
         res, _, _ = pg.decide(ev("Bash", command="docker run --privileged img"),
                               self.cwd, policy_path=pol,
                               audit_path=os.path.join(self.cwd, "a.jsonl"))
         self.assertFalse(res["allowed"])
-        self.assertEqual(res["rule"], "dangerous_docker")
+        self.assertEqual(res["rule"], "policy_config")
 
-    def test_corrupt_fail_open_for_ownership(self):
+    def test_corrupt_denies_write_allows_read(self):
+        # P3 FH2: policy hong deny nhom ghi (Edit/Write/Bash) kem thong diep
+        # cau hinh ro rang, van cho Read thuong; audit van ghi.
         pol = self._broken()
-        res, _, _ = pg.decide(ev("Write", file_path=os.path.join(self.cwd, "x.py")),
-                              self.cwd, policy_path=pol,
-                              audit_path=os.path.join(self.cwd, "a.jsonl"))
-        self.assertTrue(res["allowed"])
+        for event in (ev("Write", file_path=os.path.join(self.cwd, "x.py")),
+                      ev("Edit", file_path=os.path.join(self.cwd, "x.py")),
+                      ev("Bash", command="ls")):
+            with self.subTest(event=event):
+                res, ok, _ = pg.decide(
+                    event, self.cwd, policy_path=pol,
+                    audit_path=os.path.join(self.cwd, "a.jsonl"))
+                self.assertFalse(res["allowed"])
+                self.assertEqual(res["rule"], "policy_config")
+                self.assertIn("policy", res["reason"].lower())
+                self.assertTrue(ok)
+        res, ok, audit = pg.decide(ev("Read", file_path="src/main.py"),
+                                   self.cwd, policy_path=pol,
+                                   audit_path=os.path.join(self.cwd, "b.jsonl"))
+        self.assertTrue(res["allowed"], res)
+        self.assertTrue(ok)
+        with open(audit, encoding="utf-8") as f:
+            rec = json.loads(f.readline())
+        self.assertTrue(rec["policy_corrupt"])
 
     def test_audit_record_shape(self):
         audit = os.path.join(self.cwd, "guard_audit.jsonl")
@@ -327,12 +346,28 @@ class TestCorruptPolicy(EnvScrub):
 
 
 class TestRoleFromEnv(EnvScrub):
-    def test_env_role_allows_label(self):
+    def test_env_role_is_ignored(self):
+        # P2 FH2 (RV5): AI_PIPELINE_ROLE tu khai BI BO; role chi tu context.
         os.environ["AI_PIPELINE_ROLE"] = "integrator"
         res, _, _ = pg.decide(ev("Read", file_path="seal_audit.jsonl"),
                               self.cwd, policy_path=None,
                               audit_path=os.path.join(self.cwd, "a.jsonl"))
-        self.assertTrue(res["allowed"])
+        self.assertFalse(res["allowed"], "env role phai bi bo qua")
+
+    def test_role_from_task_context(self):
+        run = os.path.join(self.tmp.name, "run")
+        os.makedirs(run)
+        plan = {"run_id": "rr", "tasks": [
+            {"id": "I1", "role": "integrator", "owns": [], "bugfix": False}]}
+        with open(os.path.join(run, "plan.json"), "w",
+                  encoding="utf-8", newline="\n") as f:
+            json.dump(plan, f)
+        pg.context_write(run)
+        os.environ["AI_PIPELINE_TASK"] = "I1"
+        res, _, _ = pg.decide(ev("Read", file_path="seal_audit.jsonl"),
+                              self.cwd, policy_path=None, run_dir=run,
+                              audit_path=os.path.join(self.cwd, "a.jsonl"))
+        self.assertTrue(res["allowed"], res)
 
     def test_no_env_role_denies_label(self):
         res, _, _ = pg.decide(ev("Read", file_path="seal_audit.jsonl"),
@@ -771,6 +806,326 @@ class TestContextWriteFH(EnvScrub):
         self.assertTrue(os.path.isfile(os.path.join(run, "task_context.json")))
         rc = pg.main(["context", "write", os.path.join(self.tmp.name, "nope")])
         self.assertEqual(rc, 1)
+
+
+class TestHooksOwnGroupFH2(unittest.TestCase):
+    """FH2-1: install luon tao NHOM RIENG matcher du, khong dung nhom user."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.proj = self.tmp.name
+        self.sp = os.path.join(self.proj, ".claude", "settings.json")
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _write_settings(self, data):
+        os.makedirs(os.path.dirname(self.sp), exist_ok=True)
+        with open(self.sp, "w", encoding="utf-8", newline="\n") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+
+    def _read_settings(self):
+        with open(self.sp, encoding="utf-8") as f:
+            return json.load(f)
+
+    def _user_settings(self):
+        return {
+            "permissions": {"allow": ["Bash(git *)"]},
+            "hooks": {"PreToolUse": [
+                {"matcher": "Read",
+                 "hooks": [{"type": "command", "command": "user-read.sh"}]},
+                {"matcher": "Bash",
+                 "hooks": [{"type": "command", "command": "user-bash.sh"}]},
+                {"matcher": "",
+                 "hooks": [{"type": "command", "command": "user-any.sh"}]},
+            ]}}
+
+    def test_full_matcher_value(self):
+        self.assertEqual(
+            hooks_mod.MATCHER,
+            "Read|Edit|MultiEdit|Write|NotebookEdit|Bash|Grep|Glob")
+
+    def test_template_matcher_matches(self):
+        with open(os.path.join(ROOT, "templates", "hooks.settings.template.json"),
+                  encoding="utf-8") as f:
+            tpl = json.load(f)
+        self.assertEqual(tpl["hooks"]["PreToolUse"][0]["matcher"],
+                         hooks_mod.MATCHER)
+
+    def test_install_creates_own_group_keeps_user(self):
+        before = self._user_settings()
+        self._write_settings(copy.deepcopy(before))
+        changed, _ = hooks_mod.install(self.proj)
+        self.assertTrue(changed)
+        data = self._read_settings()
+        groups = data["hooks"]["PreToolUse"]
+        self.assertEqual(len(groups), 4)  # 3 user + 1 rieng
+        for g, want in zip(groups[:3], before["hooks"]["PreToolUse"]):
+            self.assertEqual(g["matcher"], want["matcher"])
+            self.assertEqual(g["hooks"], want["hooks"])
+        own = groups[3]
+        self.assertEqual(own["matcher"], hooks_mod.MATCHER)
+        self.assertEqual(len(own["hooks"]), 1)
+        self.assertIn("pipeline_guard.py", json.dumps(own))
+        self.assertEqual(data["permissions"], {"allow": ["Bash(git *)"]})
+        self.assertEqual(hooks_mod.find_ours(data), 1)
+
+    def test_install_idempotent_own_group(self):
+        self._write_settings(self._user_settings())
+        hooks_mod.install(self.proj)
+        with open(self.sp, "rb") as f:
+            h1 = hashlib.sha256(f.read()).hexdigest()
+        changed, _ = hooks_mod.install(self.proj)
+        self.assertFalse(changed)
+        with open(self.sp, "rb") as f:
+            self.assertEqual(h1, hashlib.sha256(f.read()).hexdigest())
+
+    def test_uninstall_removes_only_own_group(self):
+        self._write_settings(self._user_settings())
+        hooks_mod.install(self.proj)
+        changed, _ = hooks_mod.uninstall(self.proj)
+        self.assertTrue(changed)
+        data = self._read_settings()
+        self.assertEqual(data["hooks"]["PreToolUse"],
+                         self._user_settings()["hooks"]["PreToolUse"])
+        self.assertNotIn("pipeline_guard.py", json.dumps(data))
+
+    def test_uninstall_cleans_legacy_merged_group(self):
+        # Ban cu tung chen guard vao nhom user: uninstall van don sach,
+        # giu hook + matcher cua user.
+        self._write_settings({
+            "hooks": {"PreToolUse": [{"matcher": "Bash", "hooks": [
+                {"type": "command", "command": "user-check.sh"},
+                {"type": "command", "command": "python",
+                 "args": ["${CLAUDE_PROJECT_DIR}/scripts/pipeline_guard.py"]},
+            ]}]}})
+        changed, _ = hooks_mod.uninstall(self.proj)
+        self.assertTrue(changed)
+        data = self._read_settings()
+        groups = data["hooks"]["PreToolUse"]
+        self.assertEqual(len(groups), 1)
+        self.assertEqual(groups[0]["matcher"], "Bash")
+        self.assertEqual(groups[0]["hooks"],
+                         [{"type": "command", "command": "user-check.sh"}])
+
+
+class TestAllowedPackagesArgvFH2(EnvScrub):
+    """FH2-2: allowed_packages so khop CHINH XAC theo argv."""
+
+    def check(self, event, policy=None, **ctxkw):
+        return pg.evaluate(event, policy or fresh_policy(), self.ctx(**ctxkw))
+
+    def test_substring_does_not_allow(self):
+        p = fresh_policy(allowed_packages=["safe"])
+        r = self.check(ev("Bash", command="pip install unsafe evil"), policy=p)
+        self.assertFalse(r["allowed"], "substring 'safe' trong 'unsafe' phai deny")
+        r = self.check(ev("Bash", command="pip install safe"), policy=p)
+        self.assertTrue(r["allowed"])
+
+    def test_normalization(self):
+        p = fresh_policy(allowed_packages=["Safe_Lib"])
+        for c in ("pip install safe-lib", "pip install SAFE_LIB==2.0",
+                  "pip install safe_lib[extra]>=1"):
+            with self.subTest(cmd=c):
+                r = self.check(ev("Bash", command=c), policy=p)
+                self.assertTrue(r["allowed"], c)
+        r = self.check(ev("Bash", command="pip install safe-libx"), policy=p)
+        self.assertFalse(r["allowed"])
+
+    def test_all_packages_must_be_allowed(self):
+        p = fresh_policy(allowed_packages=["torch"])
+        r = self.check(ev("Bash", command="pip install torch requests"), policy=p)
+        self.assertFalse(r["allowed"])
+        r = self.check(ev("Bash", command="pip install torch && pip install requests"),
+                       policy=p)
+        self.assertFalse(r["allowed"])
+
+    def test_requirement_file_and_url_deny(self):
+        p = fresh_policy(allowed_packages=["torch"])
+        for c in ("pip install -r req.txt",
+                  "pip install torch -r req.txt",
+                  "pip install https://x/torch-2.0.tar.gz",
+                  "pip install git+https://x/torch.git",
+                  "pip install -e .",
+                  "pip install torch @ https://x/torch.whl"):
+            with self.subTest(cmd=c):
+                r = self.check(ev("Bash", command=c), policy=p)
+                self.assertFalse(r["allowed"], c)
+
+    def test_value_flags_skipped(self):
+        p = fresh_policy(allowed_packages=["torch"])
+        for c in ("pip install --index-url https://x torch",
+                  "pip install -U torch",
+                  "pip install --no-cache-dir torch==2.0"):
+            with self.subTest(cmd=c):
+                r = self.check(ev("Bash", command=c), policy=p)
+                self.assertTrue(r["allowed"], c)
+
+    def test_npm_and_uv_pip(self):
+        p = fresh_policy(allowed_packages=["left-pad", "torch"])
+        r = self.check(ev("Bash", command="npm install left-pad@1.3.0"), policy=p)
+        self.assertTrue(r["allowed"])
+        r = self.check(ev("Bash", command="npm i left-pad evil"), policy=p)
+        self.assertFalse(r["allowed"])
+        r = self.check(ev("Bash", command="uv pip install torch"), policy=p)
+        self.assertTrue(r["allowed"])
+        r = self.check(ev("Bash", command="uv pip install requests"), policy=p)
+        self.assertFalse(r["allowed"])
+
+    def test_wrapper_with_allowed_pkg(self):
+        p = fresh_policy(allowed_packages=["torch"])
+        r = self.check(ev("Bash", command='bash -c "pip install torch"'), policy=p)
+        self.assertTrue(r["allowed"])
+        r = self.check(ev("Bash", command="sudo pip install torch"), policy=p)
+        self.assertTrue(r["allowed"])
+
+    def test_no_allowed_list_denies_all(self):
+        r = self.check(ev("Bash", command="pip install torch"))
+        self.assertFalse(r["allowed"])
+
+
+class TestWorktreeResolveFH2(EnvScrub):
+    """FH2-3: chon task theo ten worktree <run_id>-<task lowercase>."""
+
+    def _run(self, run_id, tasks):
+        run = os.path.join(self.tmp.name, "run-" + run_id)
+        os.makedirs(run, exist_ok=True)
+        plan = {"run_id": run_id, "tasks": tasks}
+        with open(os.path.join(run, "plan.json"), "w",
+                  encoding="utf-8", newline="\n") as f:
+            json.dump(plan, f, ensure_ascii=False)
+        pg.context_write(run)
+        return run
+
+    def _task(self, tid, role="integrator"):
+        return {"id": tid, "role": role, "owns": [], "bugfix": False}
+
+    def test_probe_rr_i1_lower_and_upper(self):
+        run = self._run("rr", [self._task("I1")])
+        for base in ("rr-i1", "rr-I1"):
+            with self.subTest(cwd=base):
+                wt = os.path.join(self.tmp.name, base)
+                os.makedirs(wt, exist_ok=True)
+                ctx = pg.build_context(wt, run)
+                self.assertEqual(ctx["role"], "integrator", base)
+                r = pg.evaluate(ev("Read", file_path="seal_audit.jsonl"),
+                                fresh_policy(), ctx)
+                self.assertTrue(r["allowed"], base)
+
+    def test_run_id_with_dash(self):
+        run = self._run("my-run", [self._task("T2", "module-dev")])
+        wt = os.path.join(self.tmp.name, "my-run-t2")
+        os.makedirs(wt, exist_ok=True)
+        ctx = pg.build_context(wt, run)
+        self.assertEqual(ctx["role"], "module-dev")
+
+    def test_wrong_prefix_no_match(self):
+        run = self._run("rr", [self._task("I1")])
+        wt = os.path.join(self.tmp.name, "other-i1")
+        os.makedirs(wt, exist_ok=True)
+        ctx = pg.build_context(wt, run)
+        self.assertEqual(ctx["role"], "")
+        r = pg.evaluate(ev("Read", file_path="seal_audit.jsonl"),
+                        fresh_policy(), ctx)
+        self.assertFalse(r["allowed"])
+
+    def test_task_id_case_insensitive_env(self):
+        run = self._run("rr", [self._task("I1")])
+        os.environ["AI_PIPELINE_TASK"] = "i1"
+        ctx = pg.build_context(self.cwd, run)
+        self.assertEqual(ctx["role"], "integrator")
+
+
+class TestProbeRegressionFH2(EnvScrub):
+    """FH2-4: hoi quy probe coordinator (uv pip, bash -c ghep, findstr/dir)."""
+
+    def setUp(self):
+        super().setUp()
+        os.makedirs(os.path.join(self.cwd, "labels"))
+        with open(os.path.join(self.cwd, "labels", "gold.json"), "w",
+                  encoding="utf-8", newline="\n") as f:
+            f.write('{"y": 1}')
+        os.makedirs(os.path.join(self.cwd, "src"))
+        with open(os.path.join(self.cwd, "src", "main.py"), "w",
+                  encoding="utf-8", newline="\n") as f:
+            f.write("print(1)\n")
+        self.pol = fresh_policy(protected_paths=["labels/gold.json"])
+
+    def check(self, event, policy=None, **ctxkw):
+        return pg.evaluate(event, policy or self.pol, self.ctx(**ctxkw))
+
+    def test_uv_pip_blocked(self):
+        for c in ("uv pip install x", "uv pip sync x", "UV PIP INSTALL x"):
+            with self.subTest(cmd=c):
+                r = pg.evaluate(ev("Bash", command=c), fresh_policy(),
+                                self.ctx())
+                self.assertFalse(r["allowed"], c)
+                self.assertEqual(r["rule"], "host_install")
+
+    def test_chained_payload_blocked(self):
+        for c in ('bash -c "cd x && pip install y"',
+                  'bash -c "echo ok; pip install y"',
+                  'bash -c "echo ok || pip install y"',
+                  'sh -c "cd x; pip install y"',
+                  'python -c "import os" && pip install y',
+                  "echo hi | pip install x"):
+            with self.subTest(cmd=c):
+                r = pg.evaluate(ev("Bash", command=c), fresh_policy(),
+                                self.ctx())
+                self.assertFalse(r["allowed"], c)
+                self.assertEqual(r["rule"], "host_install")
+
+    def test_chained_payload_allowed_when_clean(self):
+        r = pg.evaluate(ev("Bash", command='bash -c "cd x && echo ok"'),
+                        fresh_policy(), self.ctx())
+        self.assertTrue(r["allowed"])
+
+    def test_findstr_no_path_blocked(self):
+        r = self.check(ev("Bash", command="findstr /s foo"))
+        self.assertFalse(r["allowed"])
+        self.assertEqual(r["rule"], "label_protection")
+
+    def test_findstr_no_recurse_allowed(self):
+        r = self.check(ev("Bash", command="findstr foo src/main.py"))
+        self.assertTrue(r["allowed"])
+
+    def test_findstr_clean_dir_allowed(self):
+        r = self.check(ev("Bash", command="findstr /s foo src"))
+        self.assertTrue(r["allowed"])
+
+    def test_dir_recursive_blocked(self):
+        for c in ("dir /s", "dir /s .", "dir /s .."):
+            with self.subTest(cmd=c):
+                r = self.check(ev("Bash", command=c))
+                self.assertFalse(r["allowed"], c)
+                self.assertEqual(r["rule"], "label_protection")
+
+    def test_dir_plain_allowed(self):
+        r = self.check(ev("Bash", command="dir"))
+        self.assertTrue(r["allowed"])
+        r = self.check(ev("Bash", command="dir /s src"))
+        self.assertTrue(r["allowed"])
+
+    def test_select_string_ancestor_blocked(self):
+        r = self.check(ev("Bash", command='Select-String -Recurse -Pattern foo -Path ..'))
+        self.assertFalse(r["allowed"])
+        self.assertEqual(r["rule"], "label_protection")
+
+    def test_specific_glob_exclude_allowed(self):
+        pol = fresh_policy(protected_paths=["eval_manifest.json"])
+        r = pg.evaluate(ev("Bash", command="rg foo . --glob '!eval_manifest.json'"),
+                        pol, self.ctx())
+        self.assertTrue(r["allowed"], r)
+        r = pg.evaluate(ev("Bash", command="grep -rn foo . --exclude='eval_manifest.json'"),
+                        pol, self.ctx())
+        self.assertTrue(r["allowed"], r)
+
+    def test_real_path_with_exclude_still_blocked(self):
+        # exclude khong cuu duoc duong dan nhan that trong lenh khac
+        pol = fresh_policy(protected_paths=["eval_manifest.json"])
+        r = pg.evaluate(ev("Bash", command="cat eval_manifest.json; rg foo . --glob '!eval_manifest.json'"),
+                        pol, self.ctx())
+        self.assertFalse(r["allowed"])
 
 
 if __name__ == "__main__":
