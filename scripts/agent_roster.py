@@ -1,9 +1,15 @@
 #!/usr/bin/env python3
-"""Agent roster gate: detect which agent runtimes are usable through Orca, let the human pick, record the choice.
+"""Agent roster gate: detect which agent runtimes Orca can use, let the human pick, record the choice.
 
-  agent_roster.py detect [--json]
-      Reads Orca (status, accounts, hosts) and probes the CLI of every agent id Orca can supervise
-      (plus agents Orca cannot supervise, flagged). Read-only; never installs, logs in, or launches an agent session.
+  agent_roster.py detect [--json] [--all]
+      Reads Orca's OWN agent catalog (ids + launch commands, extracted from the installed Orca bundle; falls back to a
+      built-in list) and probes each launch command on PATH, plus Orca status/accounts/hosts. Read-only: never installs,
+      logs in, or launches an agent session. `--all` also lists catalog agents that are not installed.
+
+  agent_roster.py probe ID [--restore-run RUN_ID] [--timeout 150]
+      Readiness test of ONE agent through Orca: starts a throwaway Run and a no-op worker (no file changes, a few tokens),
+      waits for worker_done, releases it, and rebinds the coordinator to RUN_ID (default: the run bound now).
+      Use it before selecting an agent whose login/model setup you are unsure about (an installed CLI can still fail to start).
 
   agent_roster.py select <run_dir> --orchestrator ID --code ID[,ID..] --debate ID[,ID..] [--analysis ID[,ID..]]
       Validates the choice against `detect` and writes <run_dir>/agents.json.
@@ -21,21 +27,22 @@ import argparse
 import datetime as dt
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
+import time
 
 sys.stdout.reconfigure(encoding="utf-8")
 sys.stderr.reconfigure(encoding="utf-8")
 ORCA = os.environ.get("ORCA_CLI_COMMAND") or ("orca-dev" if os.environ.get("ORCA_DEV_REPO_ROOT") else "orca")
 
-# Orca agent id -> executables to probe. ids from `orca orchestration worker-start --help`.
-SUPERVISED = {
-    "claude": ["claude"], "codex": ["codex"], "opencode": ["opencode"], "opencode2": ["opencode"],
-    "cursor": ["cursor-agent", "agent"], "antigravity": ["antigravity"], "muse": ["muse"], "zcode": ["zcode"],
-}
-UNSUPERVISED = {"commandcode": ["commandcode"]}  # works only as a manually driven terminal (no worker_done)
-GROUPS = ("code", "debate", "analysis")
+# fallback when Orca's bundle cannot be read (id -> launch command)
+FALLBACK = {"claude": "claude", "codex": "codex", "opencode": "opencode", "opencode2": "opencode2", "cursor": "cursor-agent",
+            "antigravity": "agy", "muse": "muse", "zcode": "zcode", "pi": "pi", "kimi": "kimi", "command-code": "command-code",
+            "gemini": "gemini", "droid": "droid", "amp": "amp", "grok": "grok", "copilot": "copilot", "hermes": "hermes",
+            "devin": "devin", "qoder": "qodercli", "codebuddy": "codebuddy", "aider": "aider", "goose": "goose"}
+CAT_RE = re.compile(r"\{id:`([a-z0-9\-]+)`,label:(?:[^{}`]|`[^`]*`)*?cmd:`([^`]+)`")
 
 
 def run(argv, timeout=15):
@@ -47,49 +54,115 @@ def run(argv, timeout=15):
         return 1, str(e)
 
 
-def orca_json(*args):
-    rc, out = run([ORCA, *args, "--json"], 30)
+def orca_json(*args, timeout=30):
+    rc, out = run([ORCA, *args, "--json"], timeout)
     i = out.find("{")
     try:
-        return json.loads(out[i:]) if rc == 0 and i >= 0 else None
+        return json.loads(out[i:]) if i >= 0 else None
     except ValueError:
         return None
 
 
-def detect():
+def orca_catalog():
+    """(catalog dict id->cmd, source). Orca's agent catalog lives in its app bundle; the CLI has no 'list agents'."""
+    exe = shutil.which(ORCA)
+    if exe:
+        asar = os.path.join(os.path.dirname(os.path.dirname(os.path.realpath(exe))), "app.asar")
+        if os.path.exists(asar):
+            try:
+                txt = open(asar, "rb").read().decode("utf-8", "replace")
+                cat = {}
+                for m in CAT_RE.finditer(txt):
+                    cat.setdefault(m.group(1), m.group(2))
+                if len(cat) >= 10:
+                    return cat, "orca bundle"
+            except OSError:
+                pass
+    return dict(FALLBACK), "built-in fallback"
+
+
+def detect(show_all=False):
     st = orca_json("status")
     runtime_ok = bool(st and st.get("ok") and (st.get("result", {}).get("runtime", {}) or {}).get("reachable"))
-    accounts = orca_json("account", "list")
-    hosts = orca_json("host", "list")
+    accounts, hosts = orca_json("account", "list"), orca_json("host", "list")
+    cat, src = orca_catalog()
     rows = []
-    for table, supervised in ((SUPERVISED, True), (UNSUPERVISED, False)):
-        for aid, exes in table.items():
-            path = next((shutil.which(x) for x in exes if shutil.which(x)), None)
-            ver = None
-            if path:
-                rc, out = run([path, "--version"], 8)
-                ver = out.strip().splitlines()[0][:60] if rc == 0 and out.strip() else None
-            rows.append({"id": aid, "cli": path, "version": ver, "installed": bool(path),
-                         "orca_supervised": supervised,
-                         "usable": bool(path) and supervised and runtime_ok})
-    return {"orca_runtime_reachable": runtime_ok, "orca_accounts": accounts.get("result") if accounts else None,
-            "hosts": hosts.get("result") if hosts else None, "agents": rows,
-            "note": "CLI present on PATH = installed here; login/credits are not verifiable without launching a session. "
-                    "opencode2 shares the opencode CLI. An agent that fails to start is reported by Orca at worker-start."}
+    for aid, cmd in sorted(cat.items()):
+        path = shutil.which(cmd)
+        if not path and not show_all:
+            continue
+        ver = None
+        if path:
+            rc, out = run([path, "--version"], 8)
+            ver = out.strip().splitlines()[0][:60] if rc == 0 and out.strip() else None
+        rows.append({"id": aid, "cmd": cmd, "cli": path, "version": ver, "installed": bool(path),
+                     "usable": bool(path) and runtime_ok})
+    return {"orca_runtime_reachable": runtime_ok, "catalog_source": src, "catalog_size": len(cat),
+            "orca_accounts": accounts.get("result") if accounts else None, "hosts": hosts.get("result") if hosts else None,
+            "agents": rows,
+            "note": "usable = launch command found on PATH and the Orca runtime is reachable. Login/model setup is NOT verified: "
+                    "run `agent_roster.py probe <id>` (a no-op worker) before relying on an agent."}
 
 
 def cmd_detect(a):
-    d = detect()
+    d = detect(a.all)
     if a.json:
         print(json.dumps(d, ensure_ascii=False, indent=2))
         return 0
-    print(f"Orca runtime: {'OK' if d['orca_runtime_reachable'] else 'NOT reachable (run: orca open)'}")
-    print(f"{'agent id':<12} {'installed':<10} {'orca-supervised':<16} {'usable':<7} version / path")
+    print(f"Orca runtime: {'OK' if d['orca_runtime_reachable'] else 'NOT reachable (run: orca open)'}  | catalog: {d['catalog_size']} agents ({d['catalog_source']})")
+    print(f"{'agent id':<13} {'installed':<10} {'usable':<7} command / version")
     for r in d["agents"]:
-        print(f"{r['id']:<12} {str(r['installed']):<10} {str(r['orca_supervised']):<16} {str(r['usable']):<7} "
-              f"{r['version'] or ''} {r['cli'] or ''}")
+        print(f"{r['id']:<13} {str(r['installed']):<10} {str(r['usable']):<7} {r['cmd']}  {r['version'] or ''}")
     print("\n" + d["note"])
     return 0
+
+
+def current_run():
+    d = orca_json("orchestration", "run-current")
+    try:
+        return d["result"]["run"]["id"]
+    except (TypeError, KeyError):
+        return None
+
+
+def cmd_probe(a):
+    cat, _ = orca_catalog()
+    if a.id not in cat:
+        sys.exit(f"{a.id} is not in Orca's agent catalog")
+    restore = a.restore_run or current_run()
+    r = orca_json("orchestration", "run-create", "--objective", f"probe agent {a.id} (no file changes)")
+    pr = r["result"]["run"]["id"]
+    ok, detail = False, ""
+    try:
+        s = orca_json("orchestration", "worker-start", "--run", pr, "--spec",
+                      "TASK PROBE: do not read or modify any file. Just finish: send worker_done with outcome succeeded and the one-sentence summary 'probe ok'.",
+                      "--task-title", f"probe {a.id}", "--worktree", "current", "--agent", a.id, timeout=int(a.timeout) + 60)
+        res = (s or {}).get("result", {})
+        if not s or not s.get("ok") or res.get("state") not in ("ready", "running"):
+            detail = f"start failed at stage '{res.get('stage') or res.get('failedStage') or (s or {}).get('error', {}).get('code')}'"
+        else:
+            deadline = time.time() + a.timeout
+            while time.time() < deadline:
+                c = orca_json("orchestration", "check", "--run", pr, "--wait", "--types", "worker_done,escalation,question",
+                              "--timeout-ms", "20000", timeout=60)
+                msgs = (c or {}).get("result", {}).get("messages", [])
+                if any(m["type"] == "worker_done" for m in msgs):
+                    ok = True
+                    break
+                if any(m["type"] in ("escalation", "question") for m in msgs):
+                    detail = "agent asked a question/escalated (needs interactive setup)"
+                    break
+            else:
+                detail = f"no worker_done within {a.timeout}s"
+        wl = orca_json("orchestration", "worker-list", "--run", pr)
+        for w in ((wl or {}).get("result", {}).get("workers") or (wl or {}).get("result", {}).get("rows") or []):
+            if w.get("dispatchId"):
+                orca_json("orchestration", "worker-release", "--dispatch", w["dispatchId"])
+    finally:
+        if restore:
+            orca_json("orchestration", "run-use", "--id", restore)
+    print(f"probe {a.id}: {'READY (worker_done received)' if ok else 'NOT READY — ' + detail}; coordinator rebound to {restore}")
+    return 0 if ok else 1
 
 
 def split(v):
@@ -100,9 +173,10 @@ def cmd_select(a):
     d = detect()
     usable = {r["id"] for r in d["agents"] if r["usable"]}
     chosen = {"code": split(a.code), "debate": split(a.debate), "analysis": split(a.analysis) or split(a.code)}
-    bad = sorted({x for g in chosen.values() for x in g if x not in usable} | ({a.orchestrator} - usable - {"claude", "codex"}))
+    bad = sorted({x for g in chosen.values() for x in g if x not in usable} | ({a.orchestrator} - usable))
     if bad:
-        sys.exit(f"not usable through Orca here: {', '.join(bad)} (usable: {', '.join(sorted(usable)) or 'none'})")
+        sys.exit(f"not usable here: {', '.join(bad)} (usable: {', '.join(sorted(usable)) or 'none'}). "
+                 "Not installed or Orca runtime down: see `agent_roster.py detect --all`.")
     if not chosen["code"] or not chosen["debate"]:
         sys.exit("--code and --debate need at least one agent each")
     warn = []
@@ -130,6 +204,11 @@ def main():
     sp = ap.add_subparsers(dest="cmd", required=True)
     d = sp.add_parser("detect")
     d.add_argument("--json", action="store_true")
+    d.add_argument("--all", action="store_true")
+    pr = sp.add_parser("probe")
+    pr.add_argument("id")
+    pr.add_argument("--restore-run")
+    pr.add_argument("--timeout", type=int, default=150)
     s = sp.add_parser("select")
     s.add_argument("run_dir")
     s.add_argument("--orchestrator", required=True)
@@ -139,7 +218,7 @@ def main():
     sh = sp.add_parser("show")
     sh.add_argument("run_dir")
     a = ap.parse_args()
-    sys.exit({"detect": cmd_detect, "select": cmd_select, "show": cmd_show}[a.cmd](a))
+    sys.exit({"detect": cmd_detect, "probe": cmd_probe, "select": cmd_select, "show": cmd_show}[a.cmd](a))
 
 
 if __name__ == "__main__":

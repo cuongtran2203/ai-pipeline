@@ -95,7 +95,7 @@ def load_roster(run_dir):
         return None
 
 
-def assign_agents(tasks, roster):
+def assign_agents(tasks, roster, skip=()):
     """Make every worker's agent come from the human-selected roster (scripts/agent_roster.py).
     task.agent absent/"auto" -> round-robin inside the role's group (code | debate | analysis); an explicit agent
     must be one the human selected for any group. Debate tasks of the same wave get different agents when possible."""
@@ -103,7 +103,7 @@ def assign_agents(tasks, roster):
     allowed = {x for v in g.values() for x in v}
     counters = {}
     for t in tasks:
-        if t.get("kind", "worker") != "worker":
+        if t.get("kind", "worker") != "worker" or t["id"] in skip:  # already started: its agent is history
             continue
         group = GROUP_OF.get(t.get("role", ""), "analysis")
         pool = g.get(group) or g["code"]
@@ -286,7 +286,8 @@ def main():
     workers = [t for t in tasks if t.get("kind", "worker") == "worker"]
     roster = load_roster(run_dir)
     if roster:
-        assign_agents(tasks, roster)
+        st = rd(os.path.join(run_dir, "started.json"), {})
+        assign_agents(tasks, roster, skip=set(st))
     elif (a.create or a.start_ready) and not a.no_roster:
         sys.exit("agent roster missing: run `python scripts/agent_roster.py detect`, ask the human to pick the orchestrator and the "
                  f"code/debate agents, then `python scripts/agent_roster.py select {run_dir} --orchestrator .. --code .. --debate ..` "
