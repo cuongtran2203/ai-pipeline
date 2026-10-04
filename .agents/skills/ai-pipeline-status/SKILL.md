@@ -27,7 +27,7 @@ Use whenever the project already has state (`runs/<run_id>/`) or the user asks f
 | 0 intake | `spec.md` passes `validate_spec` and `G1` in `done.json` |
 | 1 analysis | `data_analysis.md`, `requirements.md`, `research.md` exist |
 | 2 planning | `proposal.md`, `critique.md`, `architecture.md`, build `plan.json` exist and `G2` done |
-| 3 build | every planned module has `eval.json` + `report.md` + `report.html` (needs `G3` before training) |
+| 3 build | every planned module (role module-dev hoặc task có execution mode) has `eval.json` + `report.md` + `report.html` (cần `G3` trước khi train; plan không train thì bỏ qua G3) |
 | 4 integration | e2e `eval.json` + both reports |
 | 5 optimize | targets met, else ≤3 rounds (`artifacts/opt-*`) |
 | 6 release | `release/` exists |
