@@ -1,0 +1,70 @@
+{
+  "title": "Chống gian lận thẻ — model fraud-xgb v0.4",
+  "version": {"model": "fraud-xgb-v0.4", "dataset": "ds-fraud-v2 (2.1M GD, train ≤ 2024-06)"},
+  "baseline_name": "fraud-xgb-v0.3",
+  "eval_contract": {
+    "unit": "giao dịch",
+    "split": {"strategy": "temporal", "details": "train ≤ 2024-06, eval 2024-07, embargo nhãn 30 ngày, feature as-of"},
+    "metrics": [
+      {"name": "PR-AUC", "direction": "higher"},
+      {"name": "chi phí/1000 GD", "direction": "lower"},
+      {"name": "FPR@recall=0.8", "direction": "lower"}
+    ],
+    "slices": ["2024-07", "kênh online", "kênh POS"],
+    "scorer": {"kind": "rule", "details": "nhãn chargeback đối soát"},
+    "uncertainty": {"method": "bootstrap theo ngày", "level": 0.95},
+    "provenance": {"eval_set_version": "eval-2024-07", "labeled_by": "chargeback feed", "date": "2024-08-15"}
+  },
+  "overview": {
+    "status": "Baseline v0.3 đạt PR-AUC 0.52 trên tháng 2024-07. Issue: FPR cao ở kênh online đêm.",
+    "method": "Thêm feature vận tốc thẻ 1h/24h (as-of), hiệu chuẩn Platt, giữ ngưỡng theo chi phí.",
+    "result": "PR-AUC +0.05, chi phí/1000 GD giảm 12%, FPR@recall=0.8 còn 2.4% (chưa đạt 2%)."
+  },
+  "tables": [
+    {
+      "name": "tháng 2024-07 (n=310k)",
+      "eval_set": "eval-2024-07",
+      "split": "temporal",
+      "rows": [
+        {"item": "PR-AUC", "value": 0.57, "n": 310000, "ci": "0.54–0.60", "prev_value": 0.52},
+        {"item": "chi phí/1000 GD", "unit": "điểm", "value": 41.2, "n": 310000, "prev_value": 46.8},
+        {"item": "FPR@recall=0.8", "value": 0.024, "n": 310000, "prev_value": 0.031}
+      ]
+    },
+    {
+      "name": "kênh online đêm (n=18k)",
+      "eval_set": "eval-2024-07",
+      "rows": [
+        {"item": "FPR@recall=0.8", "value": 0.041, "n": 18000, "prev_value": 0.058}
+      ]
+    }
+  ],
+  "errors": [
+    {
+      "cluster": "Chặn nhầm vé máy bay đêm",
+      "count": 312,
+      "denominator": 18000,
+      "fields": "kênh online đêm",
+      "cause": "Đã xác nhận: thiếu feature lịch sử vé của thẻ.",
+      "examples": [{"where": "merchant ML*AIR, 01:12", "note": "vé khứ hồi bị chặn"}]
+    },
+    {
+      "cluster": "Lọt gian lận kênh mới",
+      "count": 87,
+      "denominator": 310000,
+      "fields": "kênh ví mới",
+      "cause": "Giả thuyết: drift — kênh mới không có trong train.",
+      "examples": [{"where": "wallet X, tuần 2 tháng 7"}]
+    }
+  ],
+  "conclusion": {
+    "fixes": [
+      {"priority": "P1", "error": "Chặn nhầm vé đêm", "fix": "Thêm feature vé/mùa + whitelist merchant vé",
+       "measure": "FPR@recall=0.8 kênh online đêm ≤ 2.5%"},
+      {"priority": "P2", "error": "Drift kênh mới", "fix": "Retrain hàng tuần + monitor base rate theo kênh",
+       "measure": "PR-AUC tuần không rớt quá 0.03"}
+    ],
+    "recommend": "Chưa hạ ngưỡng chung; giữ v0.3 cho kênh ví mới tới khi retrain."
+  },
+  "artifacts": [{"label": "eval.json", "path": "examples/fraud-tabular/eval.json"}]
+}
