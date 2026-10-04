@@ -26,9 +26,13 @@ python scripts/monitor.py drift --ref ref.json --cur cur.json
 python scripts/monitor.py check runs/<id> --now 2026-10-04T12:00:00Z
 python scripts/monitor.py check runs/<id> --json
 python scripts/monitor.py list runs/<id>
-python scripts/monitor.py dismiss runs/<id> incident:monitor-... --reason "báo động giả do mùa vụ"
-python scripts/monitor.py resolve runs/<id> incident:monitor-...
+python scripts/monitor.py dismiss runs/<id> <incident> --reason "báo động giả do mùa vụ"
+python scripts/monitor.py resolve runs/<id> <incident>
+# <incident> nhận: id đầy đủ (incident:monitor-...), tên file (.md) hoặc stem (vd. acc-20260111000000-propose).
+# id không tồn tại -> lỗi rõ, liệt kê các incident đang mở.
 ```
+
+- `check --json`: stdout chỉ chứa JSON hợp lệ; mọi output của notebook/kg (side-effect) được chuyển sang **stderr**, nên supervisor/coordinator parse thẳng được.
 
 ## Đặt baseline & ngưỡng theo loại dự án
 Baseline = giai đoạn đầu sau release đã biết là ổn (`window` cuốn) hoặc giá trị đã duyệt (`value`, thường đi với `bands_abs`).
@@ -81,7 +85,7 @@ schtasks /Create /SC HOURLY /TN "ai-pipeline-monitor-<id>" /TR "python C:\duong\
   "exit_level": 2
 }
 ```
-Exit code: 0 ổn · 1 warn · 2 >= diagnose/propose/stale (cần người) · 3 lỗi policy/dữ liệu (fail-closed).
+Exit code: 0 ổn · 1 warn hoặc no_data · 2 >= diagnose/propose/stale (cần người) · 3 lỗi policy/dữ liệu (fail-closed). Policy sai enum hoặc bands sai thứ tự (cần `warn <= diagnose <= propose`, không âm) bị coi là lỗi dữ liệu → exit 3.
 
 ## Giới hạn
 - Không thay thế giám sát worker/budget (`supervisor.py`); đây là giám sát **chất lượng/tín hiệu sau release**.

@@ -25,10 +25,17 @@ Commands:
   monitor.py dismiss <run_dir> <incident_id> --reason "..." [--actor who]
   monitor.py resolve <run_dir> <incident_id> [--reason "..."] [--actor who]
 
+Ma thoat (nhat quan, supervisor/coordinator dua vao):
+  0 = on (moi metric trong band)
+  1 = co canh bao hoac vuot band nhe (warn; no_data cung tinh la canh bao)
+  2 = vuot band tang diagnose/propose hoac incident/stale dang mo (can nguoi)
+  3 = loi du lieu/policy (fail-closed: policy thieu/sai enum/sai thu tu band, metrics hong...)
+
 Stdlib only. Da nen tang (pathlib/os.path, utf-8, newline='\\n' khi ghi file sinh ra).
 """
 
 import argparse
+import contextlib
 import csv
 import datetime as dt
 import json
@@ -313,6 +320,12 @@ def validate_policy(pol):
                     errs.append(f"{prefix}.{bkey} thiếu ngưỡng '{thr}'")
                 elif not isinstance(bands[thr], (int, float)) or isinstance(bands[thr], bool):
                     errs.append(f"{prefix}.{bkey}.{thr} phải là số")
+            ordered = [bands.get(t) for t in ("warn", "diagnose", "propose")]
+            if all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in ordered):
+                if min(ordered) < 0:
+                    errs.append(f"{prefix}.{bkey} ngưỡng phải >= 0")
+                elif not (ordered[0] <= ordered[1] <= ordered[2]):
+                    errs.append(f"{prefix}.{bkey} phải tăng dần: warn <= diagnose <= propose")
         if has_sigma and not has_abs:
             base = base if isinstance(base, dict) else {}
             if not ("window" in base or "values" in base):
@@ -547,8 +560,11 @@ def _create_incident(run_dir, policy, r, now):
         "policy_version": policy.get("policy_version"), "created_at": now.strftime("%Y-%m-%dT%H:%M:%SZ"),
         "labels": r.get("labels") or {},
     })
-    _sync_incident_kg(run_dir, inc_id, r, now)
-    _log_notebook_error(run_dir, inc_id, r, now)
+    # Side-effect của notebook/kg (đọc/ghi sổ, KG) có thể in ra stdout. Đẩy sang
+    # stderr để stdout của `check --json` chỉ còn JSON hợp lệ (hợp đồng ổn định).
+    with contextlib.redirect_stdout(sys.stderr):
+        _sync_incident_kg(run_dir, inc_id, r, now)
+        _log_notebook_error(run_dir, inc_id, r, now)
     print(f"  [INCIDENT] {r['metric']} [{r['tier']}] -> {path}", file=sys.stderr)
     return inc_id
 
@@ -824,12 +840,44 @@ def cmd_list(a):
     return 0
 
 
+def _incident_match_keys(rec):
+    """Cac cach nguoi dung co the goi 1 incident: id day du, ten file, hoac stem."""
+    keys = set()
+    if rec.get("id"):
+        keys.add(str(rec["id"]))
+    path = rec.get("path")
+    if path:
+        path = str(path)
+        keys.add(path)
+        base = os.path.basename(path)
+        keys.add(base)
+        stem, _ext = os.path.splitext(base)
+        if stem:
+            keys.add(stem)
+    return keys
+
+
+def _open_incidents(run_dir, reg):
+    """Incident chua co su kien dismiss/resolve (dang mo)."""
+    events = statefile.read_jsonl(incident_events_path(run_dir))
+    closed = {ev.get("id") for ev in events if ev.get("action") in ("dismiss", "resolve")}
+    return [r for r in reg if r.get("id") not in closed]
+
+
 def _require_incident(run_dir, incident):
+    """Tra ve ban ghi incident theo id day du | ten file | stem; loi ro neu khong thay."""
     reg = statefile.read_jsonl(incidents_registry(run_dir))
-    found = [r for r in reg if r.get("id") == incident]
-    if not found:
-        raise MonitorError(f"không tìm thấy incident '{incident}' trong {incidents_registry(run_dir)}")
-    return found[-1]
+    found = [r for r in reg if incident in _incident_match_keys(r)]
+    if found:
+        return found[-1]
+    opening = _open_incidents(run_dir, reg)
+    if opening:
+        listing = "; ".join(
+            "%s (%s)" % (r.get("id"), os.path.basename(str(r.get("path") or ""))) for r in opening)
+    else:
+        listing = "(không có incident đang mở)"
+    raise MonitorError(
+        f"không tìm thấy incident '{incident}'. Incident đang mở: {listing}")
 
 
 def _append_incident_event(run_dir, incident, action, reason, actor):
@@ -844,18 +892,18 @@ def _append_incident_event(run_dir, incident, action, reason, actor):
 
 
 def cmd_dismiss(a):
-    _require_incident(a.run_dir, a.incident)
+    rec = _require_incident(a.run_dir, a.incident)
     if not a.reason or not a.reason.strip():
         raise MonitorError("dismiss BẮT BUỘC có lý do (--reason)")
-    _append_incident_event(a.run_dir, a.incident, "dismiss", a.reason.strip(), a.actor)
-    print(f"dismissed {a.incident} (lý do ghi append-only)")
+    _append_incident_event(a.run_dir, rec["id"], "dismiss", a.reason.strip(), a.actor)
+    print(f"dismissed {rec['id']} (lý do ghi append-only)")
     return 0
 
 
 def cmd_resolve(a):
-    _require_incident(a.run_dir, a.incident)
-    _append_incident_event(a.run_dir, a.incident, "resolve", (a.reason or "").strip(), a.actor)
-    print(f"resolved {a.incident}")
+    rec = _require_incident(a.run_dir, a.incident)
+    _append_incident_event(a.run_dir, rec["id"], "resolve", (a.reason or "").strip(), a.actor)
+    print(f"resolved {rec['id']}")
     return 0
 
 

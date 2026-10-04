@@ -383,7 +383,7 @@ def must_read_dict(path, what):
     """Doc JSON phai la object cho duong start/create: thieu/rong -> {};
     hong hoac sai kieu -> exit != 0 (KHONG ghi de, KHONG giu quota treo)."""
     try:
-        with open(path, encoding="utf-8-sig") as f:
+        with statefile_mod.open_read(path, encoding="utf-8-sig") as f:
             text = f.read()
     except FileNotFoundError:
         return {}
@@ -412,7 +412,7 @@ def migrate_started(run_dir):
     """
     path = os.path.join(run_dir, "started.json")
     try:
-        with open(path, encoding="utf-8-sig") as f:
+        with statefile_mod.open_read(path, encoding="utf-8-sig") as f:
             text = f.read()
     except FileNotFoundError:
         return {}
@@ -437,7 +437,7 @@ def migrate_started(run_dir):
         if isinstance(old, list):
             # Backup byte-goc DUOI KHOA (doc lai raw de tranh TOCTOU voi
             # snapshot ngoai khoa); ten doc nhat nen khong ghi de lan nhau.
-            with open(path, encoding="utf-8-sig") as f:
+            with statefile_mod.open_read(path, encoding="utf-8-sig") as f:
                 raw_text = f.read()
             bak = "%s.bak-%s-%s" % (path, stamp, marker)
             with open(bak, "w", encoding="utf-8", newline="\n") as f:
@@ -487,7 +487,7 @@ def _contract_not_empty(path, what):
     giu contract RV4 P2: chi file KHONG TON TAI moi la legacy-missing.
     """
     try:
-        with open(path, encoding="utf-8-sig") as f:
+        with statefile_mod.open_read(path, encoding="utf-8-sig") as f:
             text = f.read()
     except FileNotFoundError:
         return

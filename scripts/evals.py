@@ -201,7 +201,7 @@ def check_subcommands(root):
 
 
 def check_roles(root):
-    """Every role declared in roles/registry.json must have roles/<name>.md."""
+    """Every role named in roles/registry.json (`roles` keys OR `groups` lists) has roles/<name>.md."""
     path = os.path.join(root, "roles", "registry.json")
     if not os.path.isfile(path):
         return ["roles/registry.json không tồn tại"]
@@ -216,6 +216,68 @@ def check_roles(root):
     for name in sorted(roles):
         if not os.path.isfile(os.path.join(root, "roles", name + ".md")):
             problems.append("roles/registry.json khai role '%s' nhưng thiếu roles/%s.md" % (name, name))
+    # Role có thể chỉ xuất hiện trong groups (list ánh xạ nhóm agent) mà thiếu file.
+    groups = data.get("groups")
+    if isinstance(groups, dict):
+        for gname in sorted(groups):
+            members = groups[gname]
+            if not isinstance(members, list):
+                problems.append("roles/registry.json groups.%s phải là list" % gname)
+                continue
+            seen = set()
+            for name in members:
+                if not isinstance(name, str) or name in seen or name in roles:
+                    continue
+                seen.add(name)
+                if not os.path.isfile(os.path.join(root, "roles", name + ".md")):
+                    problems.append(
+                        "roles/registry.json groups.%s khai role '%s' nhưng thiếu roles/%s.md"
+                        % (gname, name, name))
+    return problems
+
+
+ENCODING_EXTS = (".py", ".md", ".json", ".jsonl", ".yml", ".template", ".sample")
+ENCODING_DIRS = ("skills", "roles", "templates", "schemas", "scripts", "evals", "examples")
+ENCODING_FILES = ("AGENTS.md", "CLAUDE.md")
+BOM_UTF8 = b"\xef\xbb\xbf"
+
+
+def _encoding_targets(root):
+    for folder in ENCODING_DIRS:
+        d = os.path.join(root, folder)
+        if not os.path.isdir(d):
+            continue
+        for dirpath, _dirnames, filenames in os.walk(d):
+            for name in sorted(filenames):
+                if name.lower().endswith(ENCODING_EXTS):
+                    yield os.path.join(dirpath, name)
+    for name in ENCODING_FILES:
+        p = os.path.join(root, name)
+        if os.path.isfile(p):
+            yield p
+
+
+def check_encoding(root):
+    """Text files must be valid UTF-8 and MUST NOT start with a UTF-8 BOM.
+
+    BOM ở JSON/frontmatter phá loader chuẩn (đã từng xảy ra), nên kiểm tra cả file
+    không phải JSON mà `check_json` không bắt."""
+    problems = []
+    for path in _encoding_targets(root):
+        rel = os.path.relpath(path, root).replace("\\", "/")
+        try:
+            with open(path, "rb") as f:
+                raw = f.read()
+        except OSError as exc:
+            problems.append("%s: không đọc được: %s" % (rel, exc))
+            continue
+        if raw.startswith(BOM_UTF8):
+            problems.append("%s: có BOM UTF-8 (phải ghi UTF-8 KHÔNG BOM)" % rel)
+            continue
+        try:
+            raw.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            problems.append("%s: không decode được UTF-8: %s" % (rel, exc))
     return problems
 
 
@@ -289,6 +351,7 @@ STATIC_CHECKS = (
     ("mandatory", "G1/G2/G3 + sandbox/worktree/báo cáo còn trong skill điều phối", check_mandatory_rules),
     ("contradictions", "không có mâu thuẫn từ khoá đã biết (G3 vs needs_g3)", check_contradictions),
     ("json", "schema/template JSON hợp lệ", check_json),
+    ("encoding", "file văn bản UTF-8 không BOM (kể cả .md/.py/.jsonl)", check_encoding),
 )
 
 
@@ -590,12 +653,18 @@ def _git(root, args):
 
 
 def changed_files(root, base=None):
-    """Files changed in the working tree vs `base` (default HEAD) + untracked."""
+    """Files changed in the working tree vs `base` (default HEAD) + untracked.
+
+    Tracked changes lấy từ `git diff`; file untracked mới lấy từ
+    `git status --porcelain` (dòng '?? path') để `--changed` không bỏ sót file mới.
+    """
     out = set()
     diff = ["diff", "--name-only", base] if base else ["diff", "--name-only", "HEAD"]
     out.update(x.strip() for x in _git(root, diff).splitlines() if x.strip())
-    out.update(x.strip() for x in _git(root, ["ls-files", "--others", "--exclude-standard"]).splitlines() if x.strip())
-    return sorted(x.replace("\\", "/") for x in out)
+    for line in _git(root, ["status", "--porcelain"]).splitlines():
+        if line.startswith("?? "):
+            out.add(line[3:].strip())
+    return sorted(x.replace("\\", "/") for x in out if x)
 
 
 def is_eval_relevant(paths):

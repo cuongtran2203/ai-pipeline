@@ -136,6 +136,24 @@ class StaticFixture(unittest.TestCase):
         problems = _check(self.root, "roles")
         self.assertTrue(any("critic" in p for p in problems), problems)
 
+    def test_phat_hien_role_chi_trong_groups_thieu_file(self):
+        # Role có thể chỉ được liệt kê trong `groups` (list) mà thiếu file .md.
+        (self.root / "roles" / "registry.json").write_text(
+            json.dumps({"roles": {"architect": {}},
+                        "groups": {"debate": ["architect", "ghost"]}}, ensure_ascii=False),
+            encoding="utf-8")
+        problems = _check(self.root, "roles")
+        self.assertTrue(any("ghost" in p for p in problems), problems)
+
+    def test_phat_hien_bom_utf8_trong_file_van_ban(self):
+        # BOM ở file không phải JSON mà `json` không thấy; `encoding` phải bắt.
+        target = self.root / "skills" / "ai-pipeline" / "SKILL.md"
+        with open(target, "wb") as f:
+            f.write(b"\xef\xbb\xbf" + target.read_bytes())
+        self.assertEqual(_check(self.root, "json"), [])
+        problems = _check(self.root, "encoding")
+        self.assertTrue(any("BOM" in p for p in problems), problems)
+
     def test_phat_hien_mirror_lech(self):
         with open(self.root / ".claude" / "skills" / "ai-pipeline" / "SKILL.md", "a",
                   encoding="utf-8") as f:
@@ -330,6 +348,26 @@ class ChangedTrigger(unittest.TestCase):
                 f.write("\n# sua\n")
             changed = evals.changed_files(d)
             self.assertIn("skills/ai-pipeline/SKILL.md", changed)
+
+    @unittest.skipUnless(shutil.which("git"), "cần git")
+    def test_changed_files_includes_untracked(self):
+        with tempfile.TemporaryDirectory() as d:
+            make_repo(d)
+            env = dict(os.environ, GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@t",
+                       GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@t")
+            subprocess.run(["git", "init", "-q"], cwd=d, env=env, check=True)
+            subprocess.run(["git", "add", "-A"], cwd=d, env=env, check=True)
+            subprocess.run(["git", "commit", "-qm", "init"], cwd=d, env=env, check=True)
+            new_file = Path(d) / "skills" / "ai-pipeline" / "NEW.md"
+            new_file.write_text("file moi chua add\n", encoding="utf-8")
+            changed = evals.changed_files(d)
+            self.assertIn("skills/ai-pipeline/NEW.md", changed)
+            self.assertTrue(evals.is_eval_relevant(changed))
+            r = subprocess.run([sys.executable, str(ROOT / "scripts" / "evals.py"),
+                                "run", "--changed", "--root", d],
+                               capture_output=True, text=True, encoding="utf-8",
+                               env=dict(os.environ, PYTHONIOENCODING="utf-8"), cwd=d)
+            self.assertIn("NEW.md", r.stdout, r.stdout + r.stderr)
 
 
 if __name__ == "__main__":
