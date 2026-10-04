@@ -67,9 +67,28 @@ Tính chất: chạy lại `init` nhiều lần cho kết quả giống nhau (id
 | `ai-pipeline validate <spec>` | liệt kê câu hỏi còn thiếu cho G1 |
 | `ai-pipeline plan plan.json [--dry-run \| --create \| --start-ready]` | DAG → task/worker trên Orca |
 | `ai-pipeline report eval.json` | `report.md` (3 phần, tiếng Việt) + `report.html` (gom cụm lỗi) |
+| `ai-pipeline pack list\|status\|install\|build\|uninstall [graphify\|obsidian] [--yes]` | cài/build pack tuỳ chọn (xem mục Pack) |
 | `ai-pipeline run <script> [args]` | chạy bất kỳ `scripts/<script>.py`; alias: `notebook kg agents diagram cleanup autonomy supervisor seal vault sync-skills` |
 
 Các lệnh `status/validate/plan/...` chỉ gọi script tương ứng trong `scripts/` của project, nên chạy ở thư mục project (hoặc `--path`).
+
+## Pack tuỳ chọn: Graphify và Obsidian
+
+Cài và build qua CLI, **luôn hỏi trước** (`--yes` để đồng ý không hỏi; không có terminal mà thiếu `--yes` thì từ chối, không cài gì):
+
+```bash
+ai-pipeline pack status                      # pack nào đã cài / đã build
+ai-pipeline pack install graphify            # venv riêng .venv-graphify, graphifyy==0.9.74, lock, .graphifyignore
+ai-pipeline pack build graphify              # graph code của cả dự án -> graphify-out/ (--code-only)
+ai-pipeline pack install obsidian            # winget / brew --cask / flatpak (hoặc hướng dẫn tải)
+ai-pipeline pack build obsidian              # vault/: tài liệu + sổ thí nghiệm + code graph -> mở bằng Obsidian
+ai-pipeline init --with graphify,obsidian --yes   # cài cùng lúc với init
+ai-pipeline pack uninstall graphify          # xoá venv do CLI tạo
+```
+
+- **Graphify**: gói PyPI `graphifyy` (hai chữ y) cài vào venv trong project, không đụng Python hệ thống; cần Python ≥ 3.10 (CLI tự tìm). Build chỉ phân tích code cục bộ (`--code-only`) và gỡ mọi API key LLM khỏi môi trường, nên không có gì rời máy. Không bao giờ chạy `graphify claude|codex install` (lệnh đó sửa `AGENTS.md`/`CLAUDE.md`). `.graphifyignore` có sẵn của bạn được giữ nguyên.
+- **Obsidian**: là ứng dụng desktop; CLI chỉ phát hiện/cài bằng trình quản lý gói của hệ điều hành khi bạn đồng ý, rồi dựng `vault/` bằng `scripts/obsidian_vault.py` (stdlib, cục bộ). Thêm `.venv-graphify/`, `graphify-out/`, `vault/` vào `.gitignore`.
+- Cần mạng tới pypi.org khi cài Graphify. Mọi pack được ghi vào `.ai-pipeline.json`.
 
 ## Thêm skill riêng cho bài toán
 

@@ -114,3 +114,21 @@ class ExistingProject(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class Packs(unittest.TestCase):
+    def test_install_refused_without_yes_and_status(self):
+        with tempfile.TemporaryDirectory() as d:
+            cli("init", d)
+            ign = Path(d) / ".graphifyignore"
+            ign.write_text("mine\n", encoding="utf-8")
+            r = subprocess.run([sys.executable, "-m", "ai_pipeline", "pack", "install", "graphify", "--path", d],
+                               capture_output=True, text=True, encoding="utf-8", cwd=ROOT, stdin=subprocess.DEVNULL,
+                               env=dict(os.environ, PYTHONPATH=str(ROOT), PYTHONIOENCODING="utf-8"))
+            self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+            self.assertFalse((Path(d) / ".venv-graphify").exists())  # nothing installed without consent
+            self.assertEqual(ign.read_text(encoding="utf-8"), "mine\n")
+            rc, out = cli("pack", "status", "--path", d)
+            self.assertEqual(rc, 0)
+            self.assertIn("chua cai", out)
+            self.assertTrue((ROOT / "templates" / "graphifyignore.template").is_file())
