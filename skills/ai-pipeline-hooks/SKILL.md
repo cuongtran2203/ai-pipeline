@@ -13,12 +13,12 @@ cuong che bang may: chan truoc khi tool chay (exit code 2 + stderr).
 
 | Rule | Chan khi |
 | ---- | -------- |
-| `label_protection` | Read/Edit/Write/Bash dung duong dan nhan test (`eval_manifest.json`, thu muc nhan, `*.sealed.json`, `seal_audit.jsonl`, `recipe_lock.json`); tru `integrator`/`evaluator` |
-| `host_install` | Bash cai goi tren host (`pip/npm/yarn/apt/conda/brew/cargo/go install`); cho phep trong `docker exec/run`, `ssh <host> docker ...`, hoac goi trong `allowed_packages` |
+| `label_protection` | Read/Edit/Write/Bash dung duong dan nhan test (`eval_manifest.json`, thu muc nhan, `*.sealed.json`, `seal_audit.jsonl`, `recipe_lock.json`); KECA tim kiem DE QUY (`rg`, `grep -r/-R`, `egrep -r`, `ag`, `git grep`, `find ... -exec`, `findstr /s`, `Select-String -Recurse`, `Get-ChildItem -Recurse | ...`) co goc tim kiem bao phu file nhan; tru `integrator`/`evaluator` |
+| `host_install` | Bash cai goi tren host (`pip/pipx/npm/yarn/apt/conda/brew/cargo/go/uv/poetry/pdm install|add|download|inject|sync`, `easy_install`); CHI tinh tu-lenh that — chuoi trong quote cua lenh khac (`echo`, `git commit -m`, `grep`, heredoc) khong bi chan; cho phep trong `docker exec/run`, `ssh <host> docker ...`, hoac goi trong `allowed_packages` |
 | `dangerous_docker` | `--privileged`, `--net/--network host`, `docker system prune`, `docker rm -f` container khong phai `aipipeline-<run>-*` |
 | `ownership` | Edit/Write ngoai duong dan `owns` cua task (thieu file ownership -> bo qua) |
 | `bugfix_tests` | Task bugfix sua file trong `tests/` |
-| `destructive` | `rm -rf` ngoai thu muc tam/worktree, `git push --force/-f`, `git reset --hard` tren nhanh chinh |
+| `destructive` | `rm -rf` ngoai thu muc tam he thong/worktree (duoc xoa BEN TRONG tmp: `tempfile.gettempdir()`, `/tmp`, `/var/folders`, `%TEMP%`; cam `/`, `~`, `.`, `..`, goc o dia, `*`, duong dan chua `..`, to tien cua cwd), `git push --force/-f`, refspec `+` (`+master`, `+HEAD:master`), `git push --mirror`, `git reset --hard` tren nhanh chinh |
 
 Tat/bat tung rule trong `runs/<id>/guard_policy.json` hoac
 `.ai-pipeline/guard_policy.json` (mac dinh BAT het).
@@ -33,9 +33,32 @@ Tat/bat tung rule trong `runs/<id>/guard_policy.json` hoac
    mo rong `owns`, hoac tat rule trong `guard_policy.json` (ghi vao
    `decisions.md`). TUYET DOI khong sua `scripts/pipeline_guard.py`
    de vuot kiem tra.
-4. Role lay tu `AI_PIPELINE_ROLE` hoac file task context
-   (`<run>/task_context.json`), KHONG tu tham so tu khai trong tool call
-   (hook bo qua truong role trong event).
+4. Role lay tu `AI_PIPELINE_ROLE`, hoac tu task trong
+   `<run>/task_context.json` (`{"tasks": {<TASK_ID>: {role, owns, bugfix}}}`),
+   KHONG tu tham so tu khai trong tool call (hook bo qua truong role
+   trong event). Khong tim duoc task -> role rong (fail-closed: van chan nhan).
+
+## Cap role tu dong (coordinator chay truoc khi start worker)
+
+Hook khong tu biet worker dang lam task nao, nen coordinator cap 1 lan
+sau khi plan duoc duyet (G2) va truoc moi dot `worker-start`:
+
+```sh
+python scripts/pipeline_guard.py context write runs/<id>   # plan.json -> task_context.json (atomic)
+```
+
+`context write` doc `runs/<id>/plan.json` (hoac `artifacts/*/plan.json`),
+ghi `<run>/task_context.json`. Khi hook chay, task duoc chon theo:
+
+1. Bien moi truong `AI_PIPELINE_TASK=<TASK_ID>` (uu tien; coordinator truyen
+   cho worker luc start, cung voi `AI_PIPELINE_RUN_DIR=<run_dir>`), hoac
+2. Ten worktree/thu muc cwd dang `<run_id>-<task_id>` (chu thuong, vi du
+   `ai-pipeline-v2-fh`; `plan_to_orca.py` dat ten worktree `--name
+   <run>-<task>` nen khop tu dong).
+
+Kiem tra nhanh: `AI_PIPELINE_TASK=FH AI_PIPELINE_RUN_DIR=runs/<id>
+python scripts/pipeline_guard.py --check --tool Read \
+--input '{"file_path":"runs/<id>/seal_audit.jsonl"}'`.
 
 ## Doc audit
 
@@ -68,9 +91,15 @@ KHONG bia co che tu dong. Chi co:
 ## Gioi han (hook KHONG phai sandbox that)
 
 - Bash co the vong qua bang cach ma hoa/giau lenh: `base64 -d`,
-  bien moi truong (`$X=pip; $X install`), noi chuoi, `eval`, chay qua
-  `sh -c` long nhau, hoac goi truc tiep binary (`/usr/bin/pip` van khop
-  pattern `pip install`, nhung `python -c "import pip..."` thi khong).
+  bien moi truong (`$X=pip; $X install`), noi chuoi, `eval`, chay script
+  (`sh setup.sh` — noi dung script khong duoc quet), hoac `python -c`
+  goi `subprocess` (payload `-c` duoc quet theo tu-lenh, nhung lenh dung
+  trong chuoi Python nhu `os.system('pip install x')` thi khong).
+  Tim kiem de quy duoc phan giai symlink (realpath tren POSIX; tren
+  Windows symlink can quyen tao nen chi kiem chung khi tao duoc).
+- Tim kiem de quy duoc CHO QUA khi tim trong thu muc con khong chua file
+  nhan, hoac khi da loai nhan bang glob/--exclude khop that
+  (`--glob '!*sealed*'`, `--exclude='*.json'`, pathspec `:!...`).
 - Tool khong thuoc Read/Edit/Write/Bash (vd. NotebookEdit, MCP tool ghi
   file) hien khong bi kiem tra.
 - Hook het timeout thi Claude Code CHO QUA (khong chan) — giu guard nhanh,
