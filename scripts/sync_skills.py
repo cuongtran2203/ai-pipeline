@@ -2,6 +2,8 @@
 """Copy skills/ (single source of truth) into .claude/skills and .agents/skills.
 
 Copies, not symlinks, so it works on Windows. Run after editing anything under skills/.
+Only the skill folders present in skills/ are replaced; other skills a project keeps in
+.claude/skills or .agents/skills are left alone.
 `--check` exits 1 if a target is out of sync (CI / pre-run guard).
 """
 import filecmp
@@ -26,16 +28,22 @@ def in_sync(a, b):
 def main():
     check = "--check" in sys.argv
     bad = False
+    names = sorted(n for n in os.listdir(SRC) if os.path.isdir(os.path.join(SRC, n)))
     for t in TARGETS:
+        rel = os.path.relpath(t, ROOT)
         if check:
-            if not in_sync(SRC, t):
-                print(f"OUT OF SYNC: {os.path.relpath(t, ROOT)}")
-                bad = True
+            for n in names:
+                if not in_sync(os.path.join(SRC, n), os.path.join(t, n)):
+                    print(f"OUT OF SYNC: {os.path.join(rel, n)}")
+                    bad = True
             continue
-        if os.path.isdir(t):
-            shutil.rmtree(t)
-        shutil.copytree(SRC, t)
-        print(f"synced -> {os.path.relpath(t, ROOT)}")
+        os.makedirs(t, exist_ok=True)
+        for n in names:
+            dst = os.path.join(t, n)
+            if os.path.isdir(dst):
+                shutil.rmtree(dst)
+            shutil.copytree(os.path.join(SRC, n), dst)
+        print(f"synced -> {rel}")
     return 1 if bad else 0
 
 
