@@ -54,6 +54,41 @@ sys.stderr.reconfigure(encoding="utf-8")
 
 BUILD_ROLES = {"module-dev", "integrator", "error-analyst", "weakness-diagnostician"}
 
+MODES = ("train", "evaluate-only", "retrieve-only", "inference-service", "monitor")
+
+
+def load_registry():
+    """roles/registry.json là nguồn duy nhất cho role -> nhóm; thiếu file thì dùng fallback cứng."""
+    try:
+        with open(os.path.join(ROOT, "roles", "registry.json"), encoding="utf-8") as f:
+            reg = json.load(f)
+        groups = {r: g for g, rs in reg.get("groups", {}).items() for r in rs}
+        if groups:
+            return groups
+    except (OSError, ValueError):
+        pass
+    return dict(GROUP_OF_FALLBACK)
+
+
+GROUP_OF_FALLBACK = {"module-dev": "code", "integrator": "code", "error-analyst": "code", "feasibility-analyst": "code", "weakness-diagnostician": "code",
+            "model-proposer": "debate", "critic": "debate", "architect": "debate"}
+
+
+def group_of(role):
+    return load_registry().get(role, "analysis")
+
+
+def effective_mode(t):
+    """Mode thực thi: trường `mode` mới; thiếu thì suy từ phase/id/role cũ (phase train/probe = train)."""
+    if t.get("mode") in MODES:
+        return t["mode"]
+    return "train" if is_train_task(t) else None
+
+
+def needs_g3(t):
+    """Chỉ task train mới cần gate G3 (GPU/server). Các mode còn lại chạy CPU/container thường được."""
+    return effective_mode(t) == "train"
+
 
 def is_train_task(t):
     if t.get("phase") in ("train", "probe"):  # probe = cheap baseline training, needs G2+G3 too
@@ -64,11 +99,18 @@ def is_train_task(t):
 
 
 def is_build_task(t):
+    if t.get("mode") in MODES:
+        return True
+    # legacy (không có mode): giữ nguyên ngữ nghĩa cũ để plan cũ vẫn validate
     return t.get("phase") in ("train", "build") or is_train_task(t) or t.get("role") in BUILD_ROLES
 
 
 def worktree_for(t):
     """Parallel build/train work gets its own worktree; read-only analysis stays on the current one."""
+    if t.get("mode") == "monitor":  # quan sát/giám sát: đọc artifact, không cần checkout riêng
+        return t.get("worktree") or "current"
+    if t.get("mode") in MODES:
+        return t.get("worktree") or "new-child"
     return t.get("worktree") or ("new-child" if is_build_task(t) else "current")
 
 
@@ -83,8 +125,7 @@ def require_git_for_worktrees(tasks):
                  "Run: git init && git add -A && git commit -m init  (or set \"worktree\": \"current\" per task)")
 
 
-GROUP_OF = {"module-dev": "code", "integrator": "code", "error-analyst": "code", "feasibility-analyst": "code", "weakness-diagnostician": "code",
-            "model-proposer": "debate", "critic": "debate", "architect": "debate"}
+GROUP_OF = GROUP_OF_FALLBACK
 
 
 def load_roster(run_dir):
@@ -105,7 +146,7 @@ def assign_agents(tasks, roster, skip=()):
     for t in tasks:
         if t.get("kind", "worker") != "worker" or t["id"] in skip:  # already started: its agent is history
             continue
-        group = GROUP_OF.get(t.get("role", ""), "analysis")
+        group = group_of(t.get("role", ""))
         pool = g.get(group) or g["code"]
         if t.get("agent") in (None, "auto"):
             i = counters.get(group, 0)
@@ -153,8 +194,14 @@ def validate_plan(plan):
             if not t.get("acceptance"):
                 sys.exit(f"plan error: worker {t['id']} is missing required field 'acceptance'")
     waves(tasks)  # exits non-zero on dependency cycle
+    for t in tasks:  # mode phải thuộc enum; resources.compute cpu|gpu
+        if t.get("mode") is not None and t["mode"] not in MODES:
+            sys.exit(f"plan error: task {t['id']} has unknown mode '{t['mode']}' (one of: {', '.join(MODES)})")
+        comp = (t.get("resources") or {}).get("compute")
+        if comp is not None and comp not in ("cpu", "gpu"):
+            sys.exit(f"plan error: task {t['id']} resources.compute must be cpu|gpu, got '{comp}'")
     gates = {t["id"] for t in tasks if t.get("kind") == "gate"}
-    trains = [t for t in tasks if t.get("kind", "worker") == "worker" and is_train_task(t)]
+    trains = [t for t in tasks if t.get("kind", "worker") == "worker" and needs_g3(t)]
     builds = [t for t in tasks if t.get("kind", "worker") == "worker" and is_build_task(t)]
     if trains and "G3" not in gates:
         sys.exit("plan error: plan has train task(s) but no gate G3 (GPU info required before training)")
@@ -194,15 +241,26 @@ def build_spec(plan, t, run_dir):
     role = t.get("role", "module-dev")
     run_dir = os.path.abspath(run_dir)  # shared across worktrees: artifacts/reports go here, not into the worktree
     isolated = worktree_for(t) in ("new-child", "new-top-level")
+    mode_line = ""
+    if t.get("mode"):
+        res = t.get("resources") or {}
+        bits = [t["mode"], "compute=" + res.get("compute", "cpu")]
+        if res.get("container"):
+            bits.append("container=" + res["container"])
+        if t["mode"] != "train":
+            bits.append("không cần G3/GPU")
+        mode_line = "Mode: " + ", ".join(bits)
+    lang = plan.get("report_lang", "vi")
     lines = [
         f"TASK {t['id']}: {t['title']}",
         f"Role prompt: read roles/{role}.md in the project root and follow it exactly.",
         f"Run dir: {run_dir}  (spec: {plan.get('spec', 'spec.md')})",
         f"Target: {t.get('target', 'see inputs')}",
+        *([mode_line] if mode_line else []),
         f"Change: {t['change']}",
         "Constraints: " + "; ".join(t.get("constraints", []) + [
             "all dataset/model artifacts must carry a version tag",
-            "reports for the user are written in Vietnamese",
+            f"reports for the user are written in {'Vietnamese' if lang == 'vi' else 'English'} (run report_lang={lang})",
             "ask the coordinator (orca orchestration ask) instead of guessing when blocked on a human decision",
             f"log each experiment/finding to the problem notebook: python scripts/notebook.py log {run_dir} --type experiment|research|error|insight --title ... --body ... --author {role} (hypothesis, setup, metrics, conclusion; see skills/ai-pipeline-notebook)",
         ]),
@@ -384,7 +442,9 @@ def main():
             if kind == "gate":
                 print(f"[GATE {t['id']}] {t['title']}  deps={deps}  -> coordinator asks the human, no worker")
                 continue
-            print(f"[{t['id']}] {t['title']}  role={t.get('role','module-dev')} agent={t.get('agent', a.agent)} deps={deps}")
+            print(f"[{t['id']}] {t['title']}  role={t.get('role','module-dev')} agent={t.get('agent', a.agent)} deps={deps}"
+                  + (f" mode={t['mode']}" if t.get("mode") else "")
+                  + (f" resources={t['resources'].get('compute', '?')}" if t.get("resources") else ""))
             print("   " + cmd_str([ORCA, "orchestration", "task-create", "--task-title", t["title"],
                                    "--spec", "<spec: %d chars, passed via --create>" % len(build_spec(plan, t, run_dir)),
                                    "--run", "<RUN_ID>",

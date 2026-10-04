@@ -1,0 +1,174 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "AI pipeline evaluation contract + results (eval.json)",
+  "description": "Modality-neutral. Mọi trường mới ngoài hợp đồng OCR cũ đều tùy chọn: eval OCR cũ vẫn hợp lệ. Renderer: scripts/render_report.py.",
+  "type": "object",
+  "required": ["title", "version", "overview", "tables", "errors", "conclusion"],
+  "properties": {
+    "title": {"type": "string"},
+    "version": {
+      "type": "object",
+      "required": ["model", "dataset"],
+      "properties": {
+        "model": {"type": "string", "description": "ID checkpoint có version, vd. rec-v0.2"},
+        "dataset": {"type": "string", "description": "ID dataset có version, vd. ds-v3"}
+      }
+    },
+    "baseline_name": {"type": "string"},
+    "round": {"type": "string"},
+    "lang": {"type": "string", "enum": ["vi", "en"], "default": "vi",
+      "description": "Ngôn ngữ báo cáo của run này (cấu hình ở spec hoặc plan.report_lang), mặc định vi."},
+    "eval_contract": {
+      "type": "object",
+      "description": "Hợp đồng đánh giá, chốt ở intake/planning; thiếu thì renderer ghi N/A, không đoán.",
+      "properties": {
+        "unit": {"type": "string", "description": "Đơn vị đánh giá: vd. trang, câu hỏi, giao dịch, giờ dự báo."},
+        "split": {
+          "type": "object",
+          "properties": {
+            "strategy": {"type": "string",
+              "enum": ["random", "group", "temporal", "rolling-origin"],
+              "description": "random | group (theo entity) | temporal (cắt theo thời gian) | rolling-origin (time series)."},
+            "details": {"type": "string", "description": "Vd. cắt 2024-01, embargo 7 ngày, as-of feature, group key."}
+          }
+        },
+        "metrics": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["name", "direction"],
+            "properties": {
+              "name": {"type": "string"},
+              "direction": {"type": "string", "enum": ["higher", "lower"],
+                "description": "Hướng tốt của metric: higher (cao tốt) hay lower (thấp tốt)."}
+            }
+          }
+        },
+        "slices": {"type": "array", "items": {"type": "string"},
+          "description": "Lát cắt báo cáo: vd. theo tháng, nhóm entity, độ khó."},
+        "horizon": {"type": "string", "description": "Chân trời đánh giá (time series / forecast), vd. h=1..24."},
+        "scorer": {
+          "type": "object",
+          "properties": {
+            "kind": {"type": "string", "enum": ["human", "model", "rule"]},
+            "details": {"type": "string", "description": "Vd. LLM-judge + spot-check người 10%, rubric v1."}
+          }
+        },
+        "uncertainty": {
+          "type": "object",
+          "properties": {
+            "method": {"type": "string", "description": "Vd. bootstrap 1000, Wilson, SE nhị thức."},
+            "level": {"type": "number", "description": "Mức tin cậy, vd. 0.95."},
+            "note": {"type": "string"}
+          }
+        },
+        "provenance": {
+          "type": "object",
+          "properties": {
+            "eval_set_version": {"type": "string"},
+            "labeled_by": {"type": "string"},
+            "date": {"type": "string"}
+          }
+        }
+      }
+    },
+    "overview": {
+      "type": "object",
+      "required": ["status", "method", "result"],
+      "properties": {
+        "status": {"type": "string"},
+        "method": {"type": "string"},
+        "result": {"type": "string"}
+      }
+    },
+    "tables": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "rows"],
+        "properties": {
+          "name": {"type": "string", "description": "Phạm vi của bảng: slice, horizon, hoặc (ví dụ OCR/KIE) loại tài liệu."},
+          "metric": {"type": "string"},
+          "n": {"description": "Số mẫu của bảng (khi mọi hàng chung mẫu)."},
+          "eval_set": {"type": "string"},
+          "split": {"type": "string"},
+          "slice": {"type": "string"},
+          "scorer": {"type": "string"},
+          "rows": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["item"],
+              "properties": {
+                "item": {"type": "string", "description": "Mục đánh giá: metric, slice, hoặc (ví dụ OCR/KIE) trường."},
+                "metric": {"type": "string"},
+                "direction": {"type": "string", "enum": ["higher", "lower"]},
+                "n": {"description": "Số mẫu của hàng."},
+                "total": {"type": "number"},
+                "correct": {"type": "number"},
+                "value": {"type": "number", "description": "Giá trị metric (tỷ lệ ≤1 hoặc số thô)."},
+                "unit": {"type": "string"},
+                "ci": {"type": "string", "description": "Khoảng tin cậy dạng text, vd. 90–98%."},
+                "baseline_correct": {"type": "number"},
+                "prev_value": {"type": "number"},
+                "prev_total": {"description": "Mẫu số version trước."},
+                "prev_metric": {"type": "string"},
+                "prev_set": {"type": "string"}
+              }
+            }
+          }
+        }
+      }
+    },
+    "errors": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["cluster", "count"],
+        "properties": {
+          "cluster": {"type": "string"},
+          "count": {"type": "number"},
+          "denominator": {"description": "Mẫu số của tỷ lệ lỗi; thiếu thì renderer ghi N/A."},
+          "fields": {"type": "string", "description": "Phạm vi bị ảnh hưởng."},
+          "cause": {"type": "string"},
+          "example": {"type": "string"},
+          "examples": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["where"],
+              "properties": {"where": {"type": "string"}, "note": {"type": "string"}, "image": {"type": "string"}}
+            }
+          }
+        }
+      }
+    },
+    "conclusion": {
+      "type": "object",
+      "required": ["fixes"],
+      "properties": {
+        "fixes": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["priority", "error", "fix", "measure"],
+            "properties": {
+              "priority": {"type": "string"},
+              "error": {"type": "string"},
+              "fix": {"type": "string"},
+              "measure": {"type": "string"}
+            }
+          }
+        },
+        "recommend": {"type": "string"}
+      }
+    },
+    "artifacts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {"label": {"type": "string"}, "path": {"type": "string"}}
+      }
+    }
+  }
+}

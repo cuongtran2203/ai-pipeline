@@ -17,3 +17,14 @@
 
 ## Chỉ tiêu
 <độ chính xác, tốc độ, chi phí>
+
+## Đánh giá (eval contract, tùy chọn nhưng nên có)
+<đơn vị đánh giá (trang / câu hỏi / giao dịch / ...); metric + hướng tốt (cao/thấp);
+lát cắt hoặc horizon; người chấm (human / model-judge / rule); độ bất định cần báo (CI/SE)>
+
+## Chia dữ liệu & chống leakage (tùy chọn nhưng nên có)
+<chiến lược: random | group (key entity) | temporal (mốc cắt) | rolling-origin (time series);
+định nghĩa as-of cho feature; kiểm tra leakage đã làm>
+
+## Ngôn ngữ báo cáo (tùy chọn, mặc định vi)
+<vi hoặc en; renderer đọc eval.json `lang`, fallback plan.report_lang, rồi vi>
