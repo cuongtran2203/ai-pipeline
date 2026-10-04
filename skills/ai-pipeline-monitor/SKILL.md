@@ -26,6 +26,7 @@ python scripts/monitor.py drift --ref ref.json --cur cur.json
 python scripts/monitor.py check runs/<id> --now 2026-10-04T12:00:00Z
 python scripts/monitor.py check runs/<id> --json
 python scripts/monitor.py list runs/<id>
+python scripts/monitor.py reconcile runs/<id> [--json]
 python scripts/monitor.py dismiss runs/<id> <incident> --reason "báo động giả do mùa vụ"
 python scripts/monitor.py resolve runs/<id> <incident>
 # <incident> nhận: id đầy đủ (incident:monitor-...), tên file (.md) hoặc stem (vd. acc-20260111000000-propose).
@@ -33,6 +34,16 @@ python scripts/monitor.py resolve runs/<id> <incident>
 ```
 
 - `check --json`: stdout chỉ chứa JSON hợp lệ; mọi output của notebook/kg (side-effect) được chuyển sang **stderr**, nên supervisor/coordinator parse thẳng được.
+- `reconcile`: ghi lại KG cho incident có `kg_pending` (sau khi KG hồi phục). `check` cũng tự gọi bước này đầu mỗi lần chạy nên KG tự phục hồi.
+
+## Validate dữ liệu vào (fail-closed, exit 3)
+Mỗi bản ghi metrics được validate lúc `record`, `ingest` **và** khi `read` lại. Lỗi trả
+`MonitorError` kèm **số dòng** và exit `3` (không bao giờ báo `ok` cho dữ liệu hỏng):
+
+- `value`: số **hữu hạn** — NaN/inf bị từ chối cả khi ghi lẫn khi đọc.
+- `n`: số nguyên **> 0**, hoặc `None` (chưa rõ / chưa đủ mẫu). `None` bị coi là chưa đạt `min_n`.
+- `ts`: mốc ISO/space hợp lệ, hoặc `None`.
+- `labels`: object (dict); `None` được coi là `{}`.
 
 ## Đặt baseline & ngưỡng theo loại dự án
 Baseline = giai đoạn đầu sau release đã biết là ổn (`window` cuốn) hoặc giá trị đã duyệt (`value`, thường đi với `bands_abs`).
@@ -41,12 +52,13 @@ Baseline = giai đoạn đầu sau release đã biết là ổn (`window` cuốn
 - **Phân loại (tabular/text)**: `accuracy`/`f1` (higher), `reject_rate`/`fallback_rate` (lower); drift trên phân phối feature và tỷ lệ lớp. Chú ý mùa vụ và lệch phân bố lớp.
 - **Forecast/time-series**: `mape`/`mae` (lower, theo horizon/slice); drift trên residual và feature ngoại sinh. Cảnh báo theo mùa, không tính xu hướng dài là drift.
 - **RAG/LLM**: `accuracy`/`em` trên bộ gán nhãn nhỏ định kỳ; tín hiệu không nhãn: `reject_rate`, tỷ lệ trả lời thiếu nguồn, latency p95, `error_rate_5xx`; drift trên phân phối câu hỏi/chủ đề (PSI phân loại).
-- **min_n**: cửa sổ nhỏ KHÔNG kích hoạt tầng cao — dưới `min_n` chỉ còn `warn`.
+- **min_n**: cửa sổ nhỏ KHÔNG kích hoạt tầng cao — dưới `min_n` chỉ còn `warn`. Cap này áp ở **đường trả chung**, gồm cả nhánh `σ=0` và khi `n=None`: `n=None` nghĩa là chưa đủ mẫu nên cũng bị hạ về `warn` (ghi rõ trong `reason`).
 - **stale_after_minutes**: đặt theo nhịp đổ dữ liệu (vd. 1440 cho batch ngày, 30 cho realtime); dữ liệu ngừng chảy là tín hiệu `stale` riêng.
 
 ## Incident -> intent -> vòng sửa
 - Tầng `warn`: chỉ log + theo dõi.
 - Tầng `diagnose`/`propose`/`stale`: `check` ghi `monitor/incidents/<id>.md` (vấn đề, metric, bằng chứng, phạm vi ảnh hưởng, đề xuất, người cần duyệt), thêm Incident vào knowledge graph (`evidenced_by` -> artifact metrics) và ghi sổ `type=error`.
+- Nếu ghi KG thất bại, incident được đánh cờ `kg_pending: true` trong `incidents.jsonl` (không mất provenance) và `monitor.py reconcile <run_dir>` sẽ thử ghi lại; `check` lần sau tự thử reconcile, khi thành công ghi sự kiện `kg_reconciled` (append-only).
 - Người duyệt (G2) quyết định: rollback model_version, hay mở một vòng sửa (dùng `ai-pipeline-diagnose` để chẩn đoán rồi `ai-pipeline-planning`). `monitor.py` KHÔNG tự rollback, không tự chạy.
 - Đóng incident: `dismiss` (bắt buộc lý do, append-only) khi báo động giả; `resolve` khi đã xử lý.
 
@@ -55,7 +67,8 @@ Baseline = giai đoạn đầu sau release đã biết là ổn (`window` cuốn
 - **Mùa vụ/chu kỳ**: so baseline cùng kỳ (cùng giờ/ngày/tuần), tránh tính đỉnh bình thường là bất thường.
 - **Mẫu nhỏ**: dưới `min_n` không kết luận; độ bất định lớn.
 - **Quá nhạy -> báo động giả**: bắt đầu 1σ/2σ/3σ nhưng nới `warn` nếu nhiễu; theo dõi tỷ lệ `dismiss`.
-- **σ=0**: baseline hằng số — mọi lệch bị coi là bất thường (band `σ=0`); nên xem lại baseline.
+- **σ=0**: baseline hằng số — mọi lệch bị coi là bất thường (band `σ=0`), nhưng vẫn chịu cap `min_n`; nên xem lại baseline.
+- **Ref hằng khi tính PSI số**: so tần suất (bin ngoài biên) thay vì trả `0`; kết quả kèm cờ `constant_reference` và không bao giờ kết luận “giống nhau” khi `cur` khác hằng số tham chiếu.
 - **Thiếu dữ liệu**: metric không chảy là tín hiệu `stale` riêng, không bỏ qua.
 
 ## Chạy định kỳ (in sẵn, KHÔNG tự cài lịch)

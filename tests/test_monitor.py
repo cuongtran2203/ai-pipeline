@@ -315,6 +315,168 @@ class CliErrorTests(unittest.TestCase):
         self.assertEqual(rows[0]["n"], 50)
 
 
+class RecordValidationTests(unittest.TestCase):
+    def _policy(self, run):
+        write_policy(run, {"accuracy": {"direction": "higher_is_better", "baseline": {"values": [0.9]},
+                                        "bands": BANDS}})
+
+    def _write_metrics(self, run, records):
+        mp = monitor.metrics_path(run)
+        os.makedirs(os.path.dirname(mp), exist_ok=True)
+        with io.open(mp, "w", encoding="utf-8", newline="\n") as f:
+            for rec_ in records:
+                f.write(json.dumps(rec_) + "\n")
+
+    def test_read_rejects_nan_with_line(self):
+        run = tmp_run(self)
+        self._policy(run)
+        self._write_metrics(run, [
+            {"ts": "2026-10-01T00:00:00Z", "metric": "accuracy", "value": 0.9, "labels": {}, "n": 10},
+            {"ts": "2026-10-01T00:00:00Z", "metric": "accuracy", "value": float("nan"), "labels": {}, "n": 10},
+        ])
+        r = run_cli("check", run, "--now", "2026-10-02T01:00:00Z")
+        self.assertEqual(r.returncode, 3, r.stdout + r.stderr)
+        self.assertIn("dòng 2", r.stderr)
+        self.assertIn("hữu hạn", r.stderr)
+
+    def test_read_rejects_bad_value_exit_3(self):
+        run = tmp_run(self)
+        self._policy(run)
+        self._write_metrics(run, [
+            {"ts": "2026-10-01T00:00:00Z", "metric": "accuracy", "value": "bad", "labels": {}, "n": 10},
+        ])
+        r = run_cli("check", run, "--now", "2026-10-02T01:00:00Z")
+        self.assertEqual(r.returncode, 3, r.stdout + r.stderr)
+        self.assertIn("'value'", r.stderr)
+
+    def test_write_rejects_nan_bad_n_bad_ts_bad_labels(self):
+        run = tmp_run(self)
+        with self.assertRaises(monitor.MonitorError):
+            monitor.write_record(run, "accuracy", float("inf"), 10, {}, None)
+        with self.assertRaises(monitor.MonitorError):
+            monitor.write_record(run, "accuracy", 0.9, 0, {}, None)
+        with self.assertRaises(monitor.MonitorError):
+            monitor.write_record(run, "accuracy", 0.9, -1, {}, None)
+        with self.assertRaises(monitor.MonitorError):
+            monitor.write_record(run, "accuracy", 0.9, 10, {}, "khong-phai-ts")
+        with self.assertRaises(monitor.MonitorError):
+            monitor.write_record(run, "accuracy", 0.9, 10, ["not", "dict"], None)
+        r = run_cli("record", run, "--metric", "accuracy", "--value", "nan")
+        self.assertEqual(r.returncode, 3, r.stdout + r.stderr)
+
+    def test_ingest_rejects_nan_with_line(self):
+        run = tmp_run(self)
+        d = tmp_run(self)
+        path = os.path.join(d, "metrics.jsonl")
+        with io.open(path, "w", encoding="utf-8", newline="\n") as f:
+            f.write(json.dumps({"ts": "2026-10-01T00:00:00Z", "metric": "accuracy",
+                                "value": 0.9, "n": 10}) + "\n")
+            f.write(json.dumps({"ts": "2026-10-01T00:00:00Z", "metric": "accuracy",
+                                "value": float("nan"), "n": 10}) + "\n")
+        r = run_cli("ingest", run, path)
+        self.assertEqual(r.returncode, 3, r.stdout + r.stderr)
+        self.assertIn("dòng 2", r.stderr)
+
+
+class MinNCapTests(unittest.TestCase):
+    def test_min_n_caps_sigma_zero(self):
+        entry = {"direction": "lower_is_better", "baseline": {"values": [1, 1, 1]},
+                 "bands": BANDS, "min_n": 50}
+        capped = monitor.evaluate_entry(entry, 1.2, 1, [])
+        self.assertEqual(capped["tier"], "warn")
+        self.assertIn("min_n", capped["reason"])
+
+    def test_min_n_caps_none(self):
+        entry = {"direction": "higher_is_better", "baseline": {"values": [0.95, 0.96, 0.94]},
+                 "bands": BANDS, "min_n": 50}
+        capped = monitor.evaluate_entry(entry, 0.6, None, [])
+        self.assertEqual(capped["tier"], "warn")
+        self.assertIn("None", capped["reason"])
+
+    def test_no_min_n_keeps_high_tier(self):
+        entry = {"direction": "lower_is_better", "baseline": {"values": [1, 1, 1]}, "bands": BANDS}
+        self.assertEqual(monitor.evaluate_entry(entry, 1.2, 1, [])["tier"], "propose")
+
+
+class PsiConstantTests(unittest.TestCase):
+    def test_constant_ref_marks_drift(self):
+        psi, info = monitor.psi_numeric_ex([1, 1, 1], [2, 2, 2])
+        self.assertTrue(info["constant_reference"])
+        self.assertGreater(psi, 0.25)
+
+    def test_constant_ref_same_cur_is_zero(self):
+        psi, info = monitor.psi_numeric_ex([1, 1, 1], [1, 1, 1])
+        self.assertTrue(info["constant_reference"])
+        self.assertEqual(psi, 0.0)
+
+    def test_drift_cli_reports_constant_reference(self):
+        run = tmp_run(self)
+        ref = os.path.join(run, "ref.json")
+        cur = os.path.join(run, "cur.json")
+        with io.open(ref, "w", encoding="utf-8") as f:
+            json.dump([1, 1, 1], f)
+        with io.open(cur, "w", encoding="utf-8") as f:
+            json.dump([2, 2, 2], f)
+        r = run_cli("drift", "--ref", ref, "--cur", cur, "--type", "numeric", "--json")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        out = json.loads(r.stdout)
+        self.assertTrue(out["constant_reference"])
+        self.assertGreater(out["psi"], 0.25)
+        self.assertNotEqual(out["psi_level"], "ổn định")
+
+
+class KGPendingTests(unittest.TestCase):
+    def _fault_run(self):
+        run = tmp_run(self)
+        write_policy(run, {"accuracy": {"direction": "higher_is_better", "baseline": {"window": 3},
+                                        "min_n": 1, "bands": BANDS}})
+        for v in (0.95, 0.96, 0.94):
+            rec(run, "accuracy", v, 100, {}, "2026-10-01T00:00:00Z")
+        rec(run, "accuracy", 0.80, 100, {}, "2026-10-02T00:00:00Z")
+        return run
+
+    def _break_kg_and_check(self, run):
+        def boom(*_a, **_k):
+            raise RuntimeError("kg down")
+        orig = monitor.kg.upsert_entity
+        monitor.kg.upsert_entity = boom
+        try:
+            monitor.run_check(run, now_iso="2026-10-02T01:00:00Z")
+        finally:
+            monitor.kg.upsert_entity = orig
+
+    def test_kg_failure_sets_pending_and_reconcile_clears(self):
+        run = self._fault_run()
+        self._break_kg_and_check(run)
+        reg = monitor.statefile.read_jsonl(monitor.incidents_registry(run))
+        self.assertTrue(reg[0]["kg_pending"])
+        self.assertEqual(monitor.reconcile(run), (1, 1, 0))
+        events = monitor.statefile.read_jsonl(monitor.incident_events_path(run))
+        self.assertIn("kg_reconciled", [e.get("action") for e in events])
+        self.assertEqual(monitor.reconcile(run), (0, 0, 0))
+
+    def test_check_auto_reconciles_pending(self):
+        run = self._fault_run()
+        self._break_kg_and_check(run)
+        monitor.run_check(run, now_iso="2026-10-02T02:00:00Z")  # tự reconcile
+        events = monitor.statefile.read_jsonl(monitor.incident_events_path(run))
+        self.assertIn("kg_reconciled", [e.get("action") for e in events])
+
+    def test_reconcile_cli_no_pending(self):
+        run = self._fault_run()
+        r = run_cli("reconcile", run, "--json")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(json.loads(r.stdout), {"pending": 0, "synced": 0, "failed": 0})
+
+    def test_reconcile_khong_doi_status_incident(self):
+        run = self._fault_run()
+        self._break_kg_and_check(run)
+        monitor.reconcile(run)
+        listed = run_cli("list", run)
+        self.assertIn("open", listed.stdout)
+        self.assertNotIn("kg_reconciled", listed.stdout)
+
+
 class MutationTests(unittest.TestCase):
     """Mutation tren ban sao tam: moi sua loi core phai bi mot test bat duoc.
 
@@ -358,8 +520,8 @@ class MutationTests(unittest.TestCase):
                  "bands": BANDS, "min_n": 30}
         real = monitor.evaluate_entry(entry, 0.80, 5, [])
         mutated = self._load_mutated(
-            'if mn and n is not None and n < mn and tier in ("diagnose", "propose"):',
-            'if False and mn and n is not None and n < mn and tier in ("diagnose", "propose"):')
+            'if not mn or tier not in ("diagnose", "propose"):',
+            'if True:')
         uncapped = mutated.evaluate_entry(entry, 0.80, 5, [])
         self.assertEqual(real["tier"], "warn")
         self.assertEqual(uncapped["tier"], "propose")
@@ -377,8 +539,8 @@ class MutationTests(unittest.TestCase):
         entry = {"direction": "higher_is_better", "baseline": {"values": [0.9, 0.9, 0.9]},
                  "bands": BANDS}
         real = monitor.evaluate_entry(entry, 0.8, 100, [])
-        mutated = self._load_mutated('"tier": "propose", "band": "σ=0"',
-                                     '"tier": "ok", "band": "σ=0"')
+        mutated = self._load_mutated('tier, measure, band = "propose", None, "σ=0"',
+                                     'tier, measure, band = "ok", None, "σ=0"')
         got = mutated.evaluate_entry(entry, 0.8, 100, [])
         self.assertEqual(real["tier"], "propose")
         self.assertEqual(got["tier"], "ok")
@@ -422,6 +584,66 @@ class MutationTests(unittest.TestCase):
                              capture_output=True, text=True, encoding="utf-8", cwd=ROOT)
         with self.assertRaises(ValueError):
             json.loads(got.stdout)
+
+    def _write_nan_metrics(self, run):
+        mp = monitor.metrics_path(run)
+        os.makedirs(os.path.dirname(mp), exist_ok=True)
+        with io.open(mp, "w", encoding="utf-8", newline="\n") as f:
+            f.write(json.dumps({"ts": "2026-10-01T00:00:00Z", "metric": "a",
+                                "value": float("nan"), "labels": {}, "n": 10}) + "\n")
+
+    def test_finite_validation_mutation_is_detected(self):
+        run_real = tmp_run(self)
+        self._write_nan_metrics(run_real)
+        with self.assertRaises(monitor.MonitorError):
+            monitor.read_metrics(run_real)
+        mod = self._load_mutated("if not math.isfinite(val):", "if False:")
+        run_mut = tmp_run(self)
+        self._write_nan_metrics(run_mut)
+        self.assertEqual(len(mod.read_metrics(run_mut)), 1)
+
+    def test_min_n_none_mutation_is_detected(self):
+        entry = {"direction": "higher_is_better", "baseline": {"values": [0.95, 0.96, 0.94]},
+                 "bands": BANDS, "min_n": 50}
+        real = monitor.evaluate_entry(entry, 0.6, None, [])
+        mod = self._load_mutated('if not mn or tier not in ("diagnose", "propose"):', "if True:")
+        got = mod.evaluate_entry(entry, 0.6, None, [])
+        self.assertEqual(real["tier"], "warn")
+        self.assertEqual(got["tier"], "propose")
+
+    def test_psi_constant_mutation_is_detected(self):
+        real, info = monitor.psi_numeric_ex([1, 1, 1], [2, 2, 2])
+        mod = self._load_mutated(
+            "return _psi_from_counts(ref_c, [cur_eq, len(cur) - cur_eq]), info",
+            'return 0.0, {"constant_reference": False}')
+        got, got_info = mod.psi_numeric_ex([1, 1, 1], [2, 2, 2])
+        self.assertGreater(real, 0.25)
+        self.assertEqual(got, 0.0)
+        self.assertTrue(info["constant_reference"])
+        self.assertFalse(got_info["constant_reference"])
+
+    def test_kg_pending_mutation_is_detected(self):
+        def boom(*_a, **_k):
+            raise RuntimeError("kg down")
+        run_real = make_band_run(self)
+        orig = monitor.kg.upsert_entity
+        monitor.kg.upsert_entity = boom
+        try:
+            monitor.run_check(run_real, now_iso="2026-10-02T01:00:00Z")
+        finally:
+            monitor.kg.upsert_entity = orig
+        real_reg = monitor.statefile.read_jsonl(monitor.incidents_registry(run_real))
+        self.assertTrue(real_reg[0]["kg_pending"])
+
+        run_mut = make_band_run(self)
+        mod = self._load_mutated('"kg_pending": not kg_ok', '"kg_pending": False')
+        monitor.kg.upsert_entity = boom
+        try:
+            mod.run_check(run_mut, now_iso="2026-10-02T01:00:00Z")
+        finally:
+            monitor.kg.upsert_entity = orig
+        mut_reg = mod.statefile.read_jsonl(mod.incidents_registry(run_mut))
+        self.assertFalse(mut_reg[0]["kg_pending"])
 
 
 if __name__ == "__main__":

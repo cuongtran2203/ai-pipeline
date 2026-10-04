@@ -22,8 +22,14 @@ Commands:
   monitor.py drift [--ref ref.json] [--cur cur.json] [--bins N] [--type numeric|categorical] [--json]
   monitor.py check <run_dir> [--now ISO] [--policy policy.json] [--json]
   monitor.py list <run_dir> [--json]
+  monitor.py reconcile <run_dir> [--json]
   monitor.py dismiss <run_dir> <incident_id> --reason "..." [--actor who]
   monitor.py resolve <run_dir> <incident_id> [--reason "..."] [--actor who]
+
+Du lieu metric duoc validate tung ban ghi (value huu han, n nguyen duong hoac None,
+ ts hop le, labels la object) luc record/ingest/read; loi -> MonitorError co so dong, exit 3.
+Incident ghi KG that bai duoc danh dau `kg_pending`; `check` lan sau tu thu `reconcile`,
+hoac chay tay `monitor.py reconcile <run_dir>`.
 
 Ma thoat (nhat quan, supervisor/coordinator dua vao):
   0 = on (moi metric trong band)
@@ -171,13 +177,22 @@ def _psi_from_counts(expected, actual, eps=1e-6):
     return psi
 
 
-def psi_numeric(ref, cur, bins=10):
-    """PSI cho dac trung so: chia bins deu tren [min(ref), max(ref)], gom hai bien."""
+def psi_numeric_ex(ref, cur, bins=10):
+    """PSI so + info. Ref HANG -> so tan suat (bin ngoai bien) thay vi tra 0.
+
+    Tra (psi, info); info['constant_reference']=True khi ref chi co mot gia tri.
+    Khong bao gio ket luan 'giong nhau' khi cur khac ref hang.
+    """
     if not ref or not cur:
-        return 0.0
+        return 0.0, {"constant_reference": False}
     lo, hi = min(ref), max(ref)
     if hi == lo:
-        return 0.0  # mot bin duy nhat: phan bo giong nhau
+        c = lo
+        ref_c = [len(ref), 0]
+        cur_eq = sum(1 for v in cur if v == c)
+        info = {"constant_reference": True, "constant_value": c,
+                "cur_outside": len(cur) - cur_eq}
+        return _psi_from_counts(ref_c, [cur_eq, len(cur) - cur_eq]), info
     width = (hi - lo) / bins
 
     def assign(v):
@@ -193,7 +208,12 @@ def psi_numeric(ref, cur, bins=10):
         ref_c[assign(v)] += 1
     for v in cur:
         cur_c[assign(v)] += 1
-    return _psi_from_counts(ref_c, cur_c)
+    return _psi_from_counts(ref_c, cur_c), {"constant_reference": False}
+
+
+def psi_numeric(ref, cur, bins=10):
+    """PSI cho dac trung so (giu API cu: chi tra psi)."""
+    return psi_numeric_ex(ref, cur, bins)[0]
 
 
 def psi_categorical(ref, cur):
@@ -344,6 +364,22 @@ def baseline_values(entry, history):
     return []
 
 
+def _cap_min_n(entry, tier, n, reason):
+    """Cap `min_n` o DUONG TRA CHUNG (ca nhanh σ=0 va n=None).
+
+    `n=None` nghia la chua ro/chua du mau -> coi la chua dat min_n. Chi cac tang
+    diagnose/propose bi ha ve warn.
+    """
+    mn = entry.get("min_n")
+    if not mn or tier not in ("diagnose", "propose"):
+        return tier, reason
+    if n is None:
+        return "warn", reason + f"; n chưa rõ (None) < min_n={mn} nên hạ tầng về warn"
+    if n < mn:
+        return "warn", reason + f"; n={n} < min_n={mn} nên hạ tầng về warn"
+    return tier, reason
+
+
 def evaluate_entry(entry, value, n, history):
     """Tra dict ket qua band cho mot metric (khong ghi file)."""
     direction = entry["direction"]
@@ -364,29 +400,27 @@ def evaluate_entry(entry, value, n, history):
     if "bands_abs" in entry:
         bands = entry["bands_abs"]
         measure, kind = dev, "abs"
+        tier = _band_tier(measure, bands)
+        band = f"{measure:.2f}"
     else:
         bands = entry.get("bands") or DEFAULT_BANDS
         kind = "z"
         if sigma is None or sigma == 0:
             if dev <= 0:
-                return {
-                    "tier": "ok", "band": "σ=0", "value": value, "n": n,
-                    "center": center, "sigma": sigma, "measure": 0.0, "measure_kind": "z",
-                    "reason": "baseline σ=0; giá trị không xấu hơn baseline",
-                }
-            return {
-                "tier": "propose", "band": "σ=0", "value": value, "n": n,
-                "center": center, "sigma": sigma, "measure": None, "measure_kind": "z",
-                "reason": "baseline σ=0 nhưng giá trị lệch theo hướng xấu: cần người xem",
-            }
-        measure = dev / sigma
-    tier = _band_tier(measure, bands)
-    band = f"{measure:.2f}" + ("σ" if kind == "z" else "")
-    reason = f"{'lệch' if dev > 0 else 'tốt hơn'} baseline {abs(dev):.4g} (σ={sigma if sigma is None else round(sigma, 6)})"
-    mn = entry.get("min_n")
-    if mn and n is not None and n < mn and tier in ("diagnose", "propose"):
-        tier = "warn"
-        reason += f"; n={n} < min_n={mn} nên hạ tầng về warn"
+                tier, measure, band = "ok", 0.0, "σ=0"
+            else:
+                tier, measure, band = "propose", None, "σ=0"
+        else:
+            measure = dev / sigma
+            tier = _band_tier(measure, bands)
+            band = f"{measure:.2f}σ"
+    sigma_txt = sigma if sigma is None else round(sigma, 6)
+    if kind == "z" and (sigma is None or sigma == 0):
+        reason = ("baseline σ=0; giá trị không xấu hơn baseline" if tier == "ok"
+                  else "baseline σ=0 nhưng giá trị lệch theo hướng xấu: cần người xem")
+    else:
+        reason = f"{'lệch' if dev > 0 else 'tốt hơn'} baseline {abs(dev):.4g} (σ={sigma_txt})"
+    tier, reason = _cap_min_n(entry, tier, n, reason)
     return {
         "tier": tier, "band": band, "value": value, "n": n, "center": center,
         "sigma": sigma, "measure": measure, "measure_kind": kind, "reason": reason,
@@ -417,10 +451,57 @@ def is_stale(latest_ts, now, stale_after_minutes):
     return (now - t).total_seconds() > stale_after_minutes * 60
 
 
-# --- Doc metrics ---
+# --- Doc/validate metrics ---
+
+def coerce_metric_record(rec, where):
+    """Validate + chuan hoa 1 ban ghi metric; loi -> MonitorError co `where` (so dong).
+
+    Quy uoc ro rang:
+      - value: so huu han (tu choi NaN/inf, ke ca khi ghi va khi doc lai).
+      - n: so nguyen duong > 0, hoac None (chua ro/chua du mau; None bi coi la chua du).
+      - ts: ISO/space hop le, hoac None.
+      - labels: object (dict), None -> {}.
+    """
+    if not isinstance(rec, dict):
+        raise MonitorError(f"{where}: bản ghi metric phải là object JSON")
+    metric = rec.get("metric")
+    if not isinstance(metric, str) or not metric.strip():
+        raise MonitorError(f"{where}: 'metric' phải là chuỗi khác rỗng")
+    if "value" not in rec:
+        raise MonitorError(f"{where}: thiếu 'value'")
+    raw = rec["value"]
+    if isinstance(raw, bool) or not isinstance(raw, (int, float, str)):
+        raise MonitorError(f"{where}: 'value' phải là số, nhận được {raw!r}")
+    try:
+        val = float(raw)
+    except (TypeError, ValueError):
+        raise MonitorError(f"{where}: 'value' phải là số hữu hạn, nhận được {raw!r}") from None
+    if not math.isfinite(val):
+        raise MonitorError(f"{where}: 'value' phải hữu hạn (NaN/inf bị từ chối), nhận được {raw!r}")
+    n = rec.get("n")
+    if n is None or (isinstance(n, str) and not n.strip()):
+        n_int = None
+    else:
+        if isinstance(n, bool):
+            raise MonitorError(f"{where}: 'n' phải là số nguyên dương hoặc None, nhận được {n!r}")
+        n_int = _as_int(n)
+        if n_int is None or n_int <= 0:
+            raise MonitorError(f"{where}: 'n' phải là số nguyên dương hoặc None, nhận được {n!r}")
+    ts = rec.get("ts")
+    if isinstance(ts, str) and not ts.strip():
+        ts = None
+    if ts is not None and parse_ts(ts) is None:
+        raise MonitorError(f"{where}: 'ts' không hợp lệ (ISO/space), nhận được {ts!r}")
+    labels = rec.get("labels")
+    if labels is None:
+        labels = {}
+    if not isinstance(labels, dict):
+        raise MonitorError(f"{where}: 'labels' phải là object (dict), nhận được {type(labels).__name__}")
+    return {"ts": ts, "metric": metric.strip(), "value": val, "labels": labels, "n": n_int}
+
 
 def read_metrics(run_dir):
-    """Doc metrics.jsonl strict: dong hong o GIUA file -> MonitorError ro rang."""
+    """Doc metrics.jsonl strict + validate tung ban ghi; loi -> MonitorError ro (so dong)."""
     p = metrics_path(run_dir)
     if not os.path.exists(p):
         return []
@@ -428,10 +509,8 @@ def read_metrics(run_dir):
         rows = statefile.read_jsonl(p, strict=True)
     except statefile.StateCorrupt as e:
         raise MonitorError(f"metrics.jsonl hỏng: {e}") from e
-    for i, rec in enumerate(rows):
-        if not isinstance(rec, dict) or not rec.get("metric") or "value" not in rec:
-            raise MonitorError(f"metrics.jsonl: bản ghi #{i + 1} thiếu 'metric' hoặc 'value'")
-    return rows
+    return [coerce_metric_record(rec, f"metrics.jsonl dòng {i}")
+            for i, rec in enumerate(rows, 1)]
 
 
 # --- Check ---
@@ -440,6 +519,9 @@ def run_check(run_dir, now_iso=None, policy_override=None):
     status, policy, errs = load_policy(run_dir, policy_override)
     if status != "ok":
         raise MonitorError(f"policy {status}: " + "; ".join(errs))
+
+    # Incident co kg_pending tu lan check truoc: tu thu ghi lai (khong can nguoi).
+    reconcile(run_dir)
 
     rows = read_metrics(run_dir)
     by_metric = {}
@@ -554,17 +636,17 @@ def _create_incident(run_dir, policy, r, now):
     path = os.path.join(incidents_dir(run_dir), filename)
     with open(path, "w", encoding="utf-8", newline="\n") as f:
         f.write(body)
+    # Side-effect của notebook/kg (đọc/ghi sổ, KG) có thể in ra stdout. Đẩy sang
+    # stderr để stdout của `check --json` chỉ còn JSON hợp lệ (hợp đồng ổn định).
+    with contextlib.redirect_stdout(sys.stderr):
+        kg_ok = _sync_incident_kg(run_dir, inc_id, r, now)
+        _log_notebook_error(run_dir, inc_id, r, now)
     statefile.append_jsonl(incidents_registry(run_dir), {
         "id": inc_id, "metric": r["metric"], "tier": r["tier"], "value": r["value"],
         "band": r["band"], "window": r.get("ts"), "path": path, "status": "open",
         "policy_version": policy.get("policy_version"), "created_at": now.strftime("%Y-%m-%dT%H:%M:%SZ"),
-        "labels": r.get("labels") or {},
+        "labels": r.get("labels") or {}, "reason": r.get("reason"), "kg_pending": not kg_ok,
     })
-    # Side-effect của notebook/kg (đọc/ghi sổ, KG) có thể in ra stdout. Đẩy sang
-    # stderr để stdout của `check --json` chỉ còn JSON hợp lệ (hợp đồng ổn định).
-    with contextlib.redirect_stdout(sys.stderr):
-        _sync_incident_kg(run_dir, inc_id, r, now)
-        _log_notebook_error(run_dir, inc_id, r, now)
     print(f"  [INCIDENT] {r['metric']} [{r['tier']}] -> {path}", file=sys.stderr)
     return inc_id
 
@@ -604,8 +686,9 @@ def _metrics_ref(run_dir):
 
 
 def _sync_incident_kg(run_dir, inc_id, r, now):
+    """Ghi Incident + canh evidenced_by vao KG; tra True/False (False -> kg_pending)."""
     if kg is None:
-        return
+        return True
     ts = now.strftime("%Y-%m-%d %H:%M:%S")
     title = f"Sự cố giám sát {r['metric']} [{r['tier']}]"
     try:
@@ -620,8 +703,38 @@ def _sync_incident_kg(run_dir, inc_id, r, now):
                          created_at=ts)
         kg.add_edge_checked(run_dir, inc_id, art_id, "evidenced_by", valid_from=ts, recorded_at=ts,
                             source_ref=_metrics_ref(run_dir))
-    except Exception as e:  # noqa: BLE001 - KG loi khong duoc lam hong check; ghi canh bao
-        print(f"  [CẢNH BÁO] không ghi được Incident vào KG ({e}); chạy kg.py sau khi sửa", file=sys.stderr)
+        return True
+    except Exception as e:  # noqa: BLE001 - KG loi khong duoc lam hong check
+        print(f"  [CẢNH BÁO] không ghi được Incident vào KG ({e}); đánh dấu kg_pending, "
+              f"chạy `monitor.py reconcile` sau khi sửa", file=sys.stderr)
+        return False
+
+
+def reconcile(run_dir):
+    """Thu ghi lai KG cho incident co `kg_pending`; tra (pending, synced, failed).
+
+    Ghi su kien `kg_reconciled` vao incident_events.jsonl (append-only) de lan sau
+    khong thu lai. `check` goi ham nay dau moi lan chay nen KG tu hoi phuc.
+    """
+    reg = statefile.read_jsonl(incidents_registry(run_dir))
+    events = statefile.read_jsonl(incident_events_path(run_dir))
+    done = {ev.get("id") for ev in events if ev.get("action") == "kg_reconciled"}
+    pending = [r for r in reg if r.get("kg_pending") and r.get("id") not in done]
+    synced = failed = 0
+    for r in pending:
+        r2 = {"metric": r.get("metric"), "tier": r.get("tier"), "value": r.get("value"),
+              "band": r.get("band"), "labels": r.get("labels") or {},
+              "reason": r.get("reason") or "khôi phục KG sau lỗi ghi (kg_pending)"}
+        with contextlib.redirect_stdout(sys.stderr):
+            ok = _sync_incident_kg(run_dir, r.get("id"), r2, dt.datetime.now(dt.timezone.utc))
+        if ok:
+            statefile.append_jsonl(incident_events_path(run_dir), {
+                "id": r.get("id"), "action": "kg_reconciled", "ts": utcnow(),
+                "reason": "ghi lại KG sau kg_pending"})
+            synced += 1
+        else:
+            failed += 1
+    return len(pending), synced, failed
 
 
 def _log_notebook_error(run_dir, inc_id, r, now):
@@ -693,19 +806,10 @@ def _parse_labels(items):
 
 
 def write_record(run_dir, metric, value, n, labels, now_iso=None):
-    if not metric or not str(metric).strip():
-        raise MonitorError("--metric không được rỗng")
-    try:
-        val = float(value)
-    except (TypeError, ValueError):
-        raise MonitorError(f"--value phải là số, nhận được: {value!r}") from None
-    if math.isnan(val) or math.isinf(val):
-        raise MonitorError("--value phải là số hữu hạn")
-    n_int = _as_int(n)
-    if n is not None and n_int is None:
-        raise MonitorError(f"--n phải là số nguyên, nhận được: {n!r}")
-    res = {"ts": now_iso or utcnow(), "metric": str(metric).strip(), "value": val,
-           "labels": labels or {}, "n": n_int}
+    res = coerce_metric_record(
+        {"ts": now_iso or utcnow(), "metric": metric, "value": value,
+         "labels": labels if labels is not None else {}, "n": n},
+        "record")
     statefile.append_jsonl(metrics_path(run_dir), res)
     return res
 
@@ -737,10 +841,7 @@ def _read_jsonl_file(path):
                 obj = json.loads(line)
             except ValueError as e:
                 raise MonitorError(f"{path}: dòng {i} không phải JSON hợp lệ ({e})") from e
-            if not obj.get("metric") or "value" not in obj:
-                raise MonitorError(f"{path}: dòng {i} thiếu 'metric' hoặc 'value'")
-            rows.append({"ts": obj.get("ts"), "metric": obj["metric"], "value": obj["value"],
-                         "n": obj.get("n"), "labels": obj.get("labels") or {}})
+            rows.append(coerce_metric_record(obj, f"{path}: dòng {i}"))
     return rows
 
 
@@ -755,8 +856,9 @@ def _read_csv(path):
             if not (row.get("metric") or "").strip():
                 continue
             labels = {k: row[k] for k in reader.fieldnames if k not in known and row.get(k) not in (None, "")}
-            rows.append({"ts": row.get("ts") or None, "metric": row["metric"], "value": row["value"],
-                         "n": row.get("n") or None, "labels": labels})
+            raw = {"ts": row.get("ts") or None, "metric": row["metric"], "value": row["value"],
+                   "n": row.get("n") or None, "labels": labels}
+            rows.append(coerce_metric_record(raw, f"{path}: dòng {reader.line_num}"))
     return rows
 
 
@@ -764,20 +866,32 @@ def cmd_drift(a):
     if not a.ref or not a.cur:
         raise MonitorError("drift cần cả --ref và --cur")
     ref, cur, dtype = _load_drift_pair(a.ref, a.cur, a.type)
+    constant_info = {"constant_reference": False}
     if dtype == "categorical":
         psi = psi_categorical(ref, cur)
         ks_d, ks_p = None, None
     else:
-        psi = psi_numeric(ref, cur, a.bins)
+        psi, constant_info = psi_numeric_ex(ref, cur, a.bins)
         ks_d, ks_p = ks_two_sample([float(v) for v in ref], [float(v) for v in cur])
     level = "ổn định" if psi < 0.1 else ("cảnh báo" if psi < 0.25 else "dịch chuyển lớn")
+    if constant_info.get("constant_reference") and constant_info.get("cur_outside"):
+        # Khong bao gio ket luan 'on dinh' khi cur khac ref hang.
+        if level == "ổn định":
+            level = "cảnh báo"
     out = {"ref_n": len(ref), "cur_n": len(cur), "type": dtype, "psi": psi, "psi_level": level,
+           "constant_reference": bool(constant_info.get("constant_reference")),
            "ks_d": ks_d, "ks_p": ks_p}
+    if constant_info.get("constant_reference"):
+        out["constant_value"] = constant_info.get("constant_value")
+        out["cur_outside"] = constant_info.get("cur_outside", 0)
     if a.json:
         print(json.dumps(out, ensure_ascii=False, indent=2))
     else:
         print(f"=== Drift ({dtype}) ===")
         print(f"PSI = {psi:.4f}  ({level}; ngưỡng: <0.1 ổn định, 0.1-0.25 cảnh báo, >0.25 dịch chuyển lớn)")
+        if constant_info.get("constant_reference"):
+            print(f"REF HẰNG = {constant_info.get('constant_value')} "
+                  f"({constant_info.get('cur_outside', 0)} giá trị cur nằm ngoài) - dùng so tần suất")
         if ks_d is not None:
             print(f"KS  = D={ks_d:.4f}, p={ks_p:.4g}  (D lớn / p nhỏ = phân bố khác biệt)")
         print(f"ref_n={len(ref)} cur_n={len(cur)}")
@@ -819,12 +933,30 @@ def cmd_check(a):
     return report["exit_level"]
 
 
+def cmd_reconcile(a):
+    try:
+        pending, synced, failed = reconcile(a.run_dir)
+    except MonitorError as e:
+        print(f"LỖI: {e}", file=sys.stderr)
+        return 3
+    if a.json:
+        print(json.dumps({"pending": pending, "synced": synced, "failed": failed},
+                         ensure_ascii=False))
+    elif pending == 0:
+        print("reconcile: không có incident kg_pending.")
+    else:
+        print(f"reconcile: {synced}/{pending} incident đã ghi lại KG"
+              + (f", {failed} còn lỗi" if failed else ""))
+    return 0 if failed == 0 else 3
+
+
 def cmd_list(a):
     reg = statefile.read_jsonl(incidents_registry(a.run_dir))
     events = statefile.read_jsonl(incident_events_path(a.run_dir))
     last_event = {}
     for ev in events:
-        if ev.get("id"):
+        # `kg_reconciled` khong doi trang thai incident (van open neu chua dismiss/resolve).
+        if ev.get("id") and ev.get("action") in ("dismiss", "resolve"):
             last_event[ev["id"]] = ev.get("action")
     items = []
     for r in reg:
@@ -936,6 +1068,10 @@ def main():
     p_ch.add_argument("--policy", help="đường dẫn policy (mặc định runs/<id>/monitor_policy.json)")
     p_ch.add_argument("--json", action="store_true")
 
+    p_rc = sp.add_parser("reconcile", help="Thử ghi lại KG cho incident có kg_pending")
+    p_rc.add_argument("run_dir")
+    p_rc.add_argument("--json", action="store_true")
+
     p_ls = sp.add_parser("list", help="Liệt kê incident giám sát")
     p_ls.add_argument("run_dir")
     p_ls.add_argument("--json", action="store_true")
@@ -954,7 +1090,8 @@ def main():
 
     a = ap.parse_args()
     handlers = {"record": cmd_record, "ingest": cmd_ingest, "drift": cmd_drift,
-                "check": cmd_check, "list": cmd_list, "dismiss": cmd_dismiss, "resolve": cmd_resolve}
+                "check": cmd_check, "reconcile": cmd_reconcile, "list": cmd_list,
+                "dismiss": cmd_dismiss, "resolve": cmd_resolve}
     try:
         return handlers[a.cmd](a)
     except MonitorError as e:

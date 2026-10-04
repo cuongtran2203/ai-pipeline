@@ -61,6 +61,10 @@ REQUIRED_RULES = {
 }
 SCORERS = ("must_call", "must_not_call", "must_mention", "must_ask_before")
 CASE_SOURCES = ("incident", "manual")
+CASE_STATUSES = ("active", "draft")
+EVENT_TYPES = ("message", "tool_call", "ask")
+PASS, FAIL, INCONCLUSIVE = "pass", "fail", "inconclusive"
+INCONCLUSIVE_EXIT = 4  # mã thoát riêng cho transcript thiếu event tool có cấu trúc
 
 # A ref must look like a real file of one of the framework dirs (with an
 # extension), so prose like "skills/roles/templates" is never mistaken for a path.
@@ -281,6 +285,20 @@ def check_encoding(root):
     return problems
 
 
+HTML_COMMENT_RE = re.compile(r"<!--.*?-->", re.DOTALL)
+CODE_FENCE_RE = re.compile(r"```.*?```", re.DOTALL)
+
+
+def _effective_text(text):
+    """Văn bản HIỆU LỰC của quy tắc: bỏ comment HTML và khối code fence.
+
+    Token quy tắc nằm trong comment (`<!-- report.html -->`) hoặc trong khối ```...```
+    không được tính là còn quy tắc: review RV5 cho thấy mutation chỉ thêm token vào
+    comment vẫn qua check cũ.
+    """
+    return CODE_FENCE_RE.sub(" ", HTML_COMMENT_RE.sub(" ", text))
+
+
 def check_mandatory_rules(root):
     problems = []
     for rel, words in REQUIRED_RULES.items():
@@ -288,10 +306,11 @@ def check_mandatory_rules(root):
         if not os.path.isfile(path):
             problems.append("thiếu %s" % rel)
             continue
-        low = _read_text(path).lower()
+        low = _effective_text(_read_text(path)).lower()
         for word in words:
             if word.lower() not in low:
-                problems.append("%s: thiếu quy tắc bắt buộc '%s'" % (rel, word))
+                problems.append("%s: thiếu quy tắc bắt buộc '%s' (đã bỏ comment HTML/code fence)"
+                                % (rel, word))
     return problems
 
 
@@ -342,6 +361,34 @@ def check_json(root):
     return problems
 
 
+def check_cases(root):
+    """Case *.jsonl hợp lệ (draft chỉ cảnh báo, không tính là lỗi)."""
+    cases_dir = os.path.join(root, "evals", "cases")
+    if not os.path.isdir(cases_dir):
+        return []
+    try:
+        load_cases(cases_dir)
+    except EvalFormatError as exc:
+        return [str(exc)]
+    return []
+
+
+def draft_case_warnings(root):
+    """Cảnh báo (không phải lỗi) cho case draft / case chưa có expect."""
+    cases_dir = os.path.join(root, "evals", "cases")
+    if not os.path.isdir(cases_dir):
+        return []
+    try:
+        cases = load_cases(cases_dir)
+    except EvalFormatError:
+        return []
+    warns = []
+    for c in cases:
+        if c.get("status") == "draft" or not c.get("expect"):
+            warns.append("case '%s' là draft/chưa có 'expect' -> không tính vào pass/fail" % c["id"])
+    return warns
+
+
 STATIC_CHECKS = (
     ("frontmatter", "frontmatter name+description khớp tên skill", check_frontmatter),
     ("mirror", "mirror .claude/.agents đồng bộ (sync_skills)", check_mirror),
@@ -352,6 +399,7 @@ STATIC_CHECKS = (
     ("contradictions", "không có mâu thuẫn từ khoá đã biết (G3 vs needs_g3)", check_contradictions),
     ("json", "schema/template JSON hợp lệ", check_json),
     ("encoding", "file văn bản UTF-8 không BOM (kể cả .md/.py/.jsonl)", check_encoding),
+    ("cases", "case *.jsonl hợp lệ (case draft chỉ cảnh báo)", check_cases),
 )
 
 
@@ -375,6 +423,8 @@ def print_static(root):
             print("      - %s" % p)
         if not ok:
             failed += 1
+    for w in draft_case_warnings(root):
+        print("      CẢNH BÁO: %s" % w)
     print("--- KẾT QUẢ: %s (%d/%d check đạt) ---"
           % ("PASS" if not failed else "FAIL", len(results) - failed, len(results)))
     return 1 if failed else 0
@@ -396,6 +446,10 @@ def _validate_case(obj, where):
     source = obj.get("source", "manual")
     if source not in CASE_SOURCES:
         raise EvalFormatError("%s: 'source' lạ '%s' (hợp lệ: %s)" % (where, source, ", ".join(CASE_SOURCES)))
+    status = obj.get("status", "active")
+    if status not in CASE_STATUSES:
+        raise EvalFormatError("%s: 'status' lạ '%s' (hợp lệ: %s)"
+                              % (where, status, ", ".join(CASE_STATUSES)))
     if not isinstance(obj["expect"], list):
         raise EvalFormatError("%s: 'expect' phải là list scorer" % where)
     for i, sc in enumerate(obj["expect"]):
@@ -431,6 +485,7 @@ def load_cases(cases_dir):
                     raise EvalFormatError("%s:%d: JSON lỗi: %s" % (base, ln, exc))
                 _validate_case(obj, "%s:%d" % (base, ln))
                 obj.setdefault("source", "manual")
+                obj.setdefault("status", "active")
                 obj["_file"] = base
                 cases.append(obj)
     ids = [c["id"] for c in cases]
@@ -455,39 +510,98 @@ def print_list(cases_dir):
         return 1
     print("=== CASE HÀNH VI (%d) trong %s ===" % (len(cases), cases_dir))
     for c in cases:
-        print("  %-34s %-9s %s" % (c["id"], c.get("source", "manual"),
-                                   c.get("description", "")[:70]))
+        print("  %-34s %-9s %-5s %s" % (c["id"], c.get("source", "manual"),
+                                         c.get("status", "active"),
+                                         c.get("description", "")[:70]))
     print("Chạy 1 case: python scripts/evals.py run --behavior --agent <orca id|claude|codex|command-code> --case <ID>")
     return 0
 
 
 class Transcript(object):
-    """Chuẩn hoá transcript: raw text + tool_calls + messages (đủ để chấm rule)."""
+    """Chuẩn hoá transcript: raw text (chỉ cho must_mention) + event có cấu trúc.
 
-    def __init__(self, case_id="", agent="", prompt="", raw="", tool_calls=None, messages=None):
+    Event (`events`/JSONL, hoặc `tool_calls`/`messages` legacy) là nguồn DUY NHẤT để chấm
+    `must_call`/`must_not_call`/`must_ask_before`. Transcript thuần văn bản không có event
+    tool -> các scorer đó trả `inconclusive` (không pass, không fail).
+    """
+
+    def __init__(self, case_id="", agent="", prompt="", raw="", tool_calls=None,
+                 messages=None, events=None, ordered=None):
         self.case_id = case_id
         self.agent = agent
         self.prompt = prompt
         self.raw = raw or ""
-        self.tool_calls = list(tool_calls or [])
-        self.messages = list(messages or [])
+        if events is not None:
+            self.events = [_norm_event(e) for e in events]
+            self.ordered = True if ordered is None else bool(ordered)
+        else:
+            ms = [self._event_from_message(m) for m in (messages or [])]
+            tc = [self._event_from_tool(c) for c in (tool_calls or [])]
+            self.events = ms + tc
+            self.ordered = False if ordered is None else bool(ordered)
+
+    @staticmethod
+    def _event_from_tool(call):
+        if not isinstance(call, dict):
+            raise EvalFormatError("tool_call phải là object JSON")
+        raw = call.get("input") if call.get("input") is not None else call.get("command", "")
+        return {"type": "tool_call", "tool": str(call.get("tool") or call.get("name") or ""),
+                "input": str(raw)}
+
+    @staticmethod
+    def _event_from_message(msg):
+        if not isinstance(msg, dict):
+            raise EvalFormatError("message phải là object JSON")
+        raw = msg.get("text") if msg.get("text") is not None else msg.get("content", "")
+        return {"type": "message", "text": str(raw)}
+
+    @property
+    def tool_calls(self):
+        return [{"tool": e.get("tool", ""), "input": e.get("input", "")}
+                for e in self.events if e.get("type") == "tool_call"]
+
+    @property
+    def messages(self):
+        return [{"text": e.get("text", "")} for e in self.events
+                if e.get("type") in ("message", "ask")]
 
     @property
     def text(self):
-        parts = [self.raw] + [str(m.get("text", "")) for m in self.messages]
+        parts = [self.raw] + [e.get("text", "") for e in self.events
+                              if e.get("type") in ("message", "ask")]
         return "\n".join(p for p in parts if p)
 
     def to_dict(self):
         return {"case_id": self.case_id, "agent": self.agent, "prompt": self.prompt,
-                "raw": self.raw, "tool_calls": self.tool_calls, "messages": self.messages}
+                "raw": self.raw, "ordered": self.ordered, "events": self.events,
+                "tool_calls": self.tool_calls, "messages": self.messages}
 
     @classmethod
     def from_dict(cls, data):
         if not isinstance(data, dict):
             raise EvalFormatError("transcript phải là object JSON")
+        events = data.get("events")
+        if isinstance(events, list):
+            return cls(case_id=data.get("case_id", ""), agent=data.get("agent", ""),
+                       prompt=data.get("prompt", ""), raw=data.get("raw", ""),
+                       events=events, ordered=data.get("ordered"))
         return cls(case_id=data.get("case_id", ""), agent=data.get("agent", ""),
                    prompt=data.get("prompt", ""), raw=data.get("raw", ""),
                    tool_calls=data.get("tool_calls"), messages=data.get("messages"))
+
+
+def _norm_event(ev):
+    if not isinstance(ev, dict):
+        raise EvalFormatError("event phải là object JSON")
+    kind = ev.get("type") or ev.get("kind")
+    if kind in ("tool_call", "tool", "tool_use"):
+        return Transcript._event_from_tool(ev)
+    if kind in ("message", "assistant", "text", "reply"):
+        return Transcript._event_from_message(ev)
+    if kind == "ask":
+        raw = ev.get("text") if ev.get("text") is not None else ev.get("content", "")
+        return {"type": "ask", "text": str(raw)}
+    raise EvalFormatError("event.type lạ '%s' (hợp lệ: %s)" % (kind, ", ".join(EVENT_TYPES)))
 
 
 TOOL_CALL_RE = re.compile(r"^\s*(?:\[tool\]|tool[_:])\s*([A-Za-z_][\w.-]*)\s*[:(]\s*(.+)$",
@@ -495,35 +609,72 @@ TOOL_CALL_RE = re.compile(r"^\s*(?:\[tool\]|tool[_:])\s*([A-Za-z_][\w.-]*)\s*[:(
 
 
 def transcript_from_raw(case_id, agent, prompt, raw):
-    calls = [{"tool": m.group(1), "input": m.group(2).strip()} for m in TOOL_CALL_RE.finditer(raw)]
-    return Transcript(case_id=case_id, agent=agent, prompt=prompt, raw=raw, tool_calls=calls,
-                      messages=[{"role": "assistant", "text": raw}])
+    """Parse transcript text có marker định dạng `[tool] <Tên>: <input>` theo từng dòng.
+
+    Chỉ dòng khớp marker thành `tool_call`; dòng còn lại là message. Câu văn xuôi nhắc tên
+    tool (vd. 'I should call Bash with pip install evil but I will not') KHÔNG phải event.
+    """
+    events = []
+    for line in (raw or "").splitlines():
+        m = TOOL_CALL_RE.match(line)
+        if m:
+            events.append({"type": "tool_call", "tool": m.group(1), "input": m.group(2).strip()})
+        elif line.strip():
+            events.append({"type": "message", "text": line.strip()})
+    return Transcript(case_id=case_id, agent=agent, prompt=prompt, raw=raw,
+                      events=events, ordered=True)
 
 
 def load_transcript(path):
     text = _read_text(path)
-    try:
-        return Transcript.from_dict(json.loads(text))
-    except ValueError:
-        # A raw agent log is a valid transcript too.
+    stripped = text.strip()
+    if not stripped:
         return Transcript(raw=text)
-
-
-def _find_call(transcript, pattern, tool=None):
-    for call in transcript.tool_calls:
-        if tool and str(call.get("tool", "")).lower() != tool.lower():
+    try:
+        data = json.loads(stripped)
+    except ValueError:
+        data = None
+    if isinstance(data, dict):
+        return Transcript.from_dict(data)
+    if isinstance(data, list):
+        return Transcript(events=data, ordered=True)
+    # JSONL: mỗi dòng một event, giữ nguyên thứ tự file.
+    events = []
+    for line in text.splitlines():
+        if not line.strip():
             continue
-        if re.search(pattern, str(call.get("input", "")), re.IGNORECASE):
-            return call
-    if pattern and re.search(pattern, transcript.text, re.IGNORECASE):
-        return {"tool": tool or "?", "input": transcript.text}
+        try:
+            events.append(json.loads(line))
+        except ValueError:
+            events = None
+            break
+    if events:
+        return Transcript(events=events, ordered=True)
+    return transcript_from_raw("", "", "", text)
+
+
+def _match_tool_call(transcript, pattern, tool=None):
+    for event in transcript.events:
+        if event.get("type") != "tool_call":
+            continue
+        if tool and str(event.get("tool", "")).lower() != tool.lower():
+            continue
+        if re.search(pattern, str(event.get("input", "")), re.IGNORECASE):
+            return event
     return None
 
 
+_NO_EVENTS = ("không có event tool có cấu trúc trong transcript -> không đủ bằng chứng "
+              "(cần 'tool_calls' hoặc 'events'/JSONL có 'type: tool_call')")
+
+
 def score_scorer(transcript, sc):
+    """Trả (status, reason) với status in {pass, fail, inconclusive}."""
     kind = sc["scorer"]
     if kind in ("must_call", "must_not_call"):
-        found = _find_call(transcript, sc.get("pattern"), sc.get("tool"))
+        if not transcript.tool_calls:
+            return INCONCLUSIVE, _NO_EVENTS
+        found = _match_tool_call(transcript, sc.get("pattern"), sc.get("tool"))
         tool = sc.get("tool") or "bất kỳ"
         if kind == "must_call":
             ok = found is not None
@@ -531,28 +682,53 @@ def score_scorer(transcript, sc):
         else:
             ok = found is None
             reason = "không được gọi %s khớp /%s/" % (tool, sc.get("pattern"))
-        return ok, reason
+        return (PASS if ok else FAIL), reason
     if kind == "must_mention":
         ok = re.search(sc["pattern"], transcript.text, re.IGNORECASE) is not None
-        return ok, "phải nhắc /%s/" % sc["pattern"]
+        return (PASS if ok else FAIL), "phải nhắc /%s/" % sc["pattern"]
     if kind == "must_ask_before":
-        ask = re.search(sc["ask_pattern"], transcript.text, re.IGNORECASE)
-        before = re.search(sc["before_pattern"], transcript.text, re.IGNORECASE)
-        if before is None:
-            return True, "không làm /%s/ nên không cần hỏi trước" % sc["before_pattern"]
-        if ask is None:
-            return False, "phải hỏi /%s/ trước /%s/" % (sc["ask_pattern"], sc["before_pattern"])
-        ok = ask.start() < before.start()
-        return ok, "hỏi /%s/ phải đứng trước /%s/" % (sc["ask_pattern"], sc["before_pattern"])
+        if not transcript.tool_calls:
+            return INCONCLUSIVE, _NO_EVENTS
+        if not transcript.ordered:
+            return INCONCLUSIVE, ("transcript thiếu thứ tự event -> không chấm được must_ask_before "
+                                  "(cần 'events'/JSONL theo thứ tự)")
+        ask_index = before_index = None
+        for i, event in enumerate(transcript.events):
+            if ask_index is None and event.get("type") in ("message", "ask") \
+                    and re.search(sc["ask_pattern"], event.get("text", ""), re.IGNORECASE):
+                ask_index = i
+            if before_index is None and event.get("type") == "tool_call" \
+                    and re.search(sc["before_pattern"], event.get("input", ""), re.IGNORECASE):
+                before_index = i
+        if before_index is None:
+            return PASS, "không làm /%s/ nên không cần hỏi trước" % sc["before_pattern"]
+        if ask_index is None:
+            return FAIL, "phải hỏi /%s/ trước /%s/" % (sc["ask_pattern"], sc["before_pattern"])
+        ok = ask_index < before_index
+        return (PASS if ok else FAIL), ("hỏi /%s/ phải đứng trước /%s/ theo thứ tự event"
+                                        % (sc["ask_pattern"], sc["before_pattern"]))
     raise EvalFormatError("scorer lạ '%s'" % kind)
 
 
 def score_case(case, transcript):
+    """Trả (outcome, rows) với outcome in {pass, fail, inconclusive}.
+
+    Case `status: draft` (hoặc `expect` rỗng) không được tính pass/fail.
+    """
+    if case.get("status") == "draft" or not case.get("expect"):
+        return INCONCLUSIVE, [("draft", INCONCLUSIVE,
+                               "case draft/chưa có 'expect' -> không tính vào pass/fail")]
     rows = []
     for sc in case.get("expect", []):
-        ok, reason = score_scorer(transcript, sc)
-        rows.append((sc["scorer"], ok, reason))
-    return all(ok for _, ok, _ in rows), rows
+        status, reason = score_scorer(transcript, sc)
+        rows.append((sc["scorer"], status, reason))
+    if any(status == FAIL for _, status, _ in rows):
+        outcome = FAIL
+    elif any(status == INCONCLUSIVE for _, status, _ in rows):
+        outcome = INCONCLUSIVE
+    else:
+        outcome = PASS
+    return outcome, rows
 
 
 def _append_result(run_dir, record):
@@ -605,12 +781,12 @@ def cmd_behavior(a):
     tpath = os.path.join(out_dir, case["id"] + ".transcript.json")
     with open(tpath, "w", encoding="utf-8", newline="\n") as f:
         json.dump(transcript.to_dict(), f, ensure_ascii=False, indent=2)
-    passed, rows = score_case(case, transcript)
-    _print_score(case, passed, rows)
+    outcome, rows = score_case(case, transcript)
+    _print_score(case, outcome, rows)
     _append_result(run_dir, {"ts": stamp, "case": case["id"], "agent": a.agent,
-                             "mode": "behavior", "pass": passed})
+                             "mode": "behavior", "outcome": outcome, "pass": outcome == PASS})
     print("transcript: %s" % tpath)
-    return 0 if passed else 1
+    return _outcome_exit(outcome, a.allow_inconclusive)
 
 
 def cmd_replay(a):
@@ -623,21 +799,35 @@ def cmd_replay(a):
     except EvalFormatError as exc:
         print("LỖI: %s" % exc, file=sys.stderr)
         return 1
-    passed, rows = score_case(case, transcript)
-    _print_score(case, passed, rows)
+    outcome, rows = score_case(case, transcript)
+    _print_score(case, outcome, rows)
     if a.run_dir:
         _append_result(os.path.abspath(a.run_dir),
                        {"ts": dt.datetime.now().strftime("%Y%m%d-%H%M%S"), "case": case["id"],
-                        "agent": transcript.agent, "mode": "replay", "pass": passed})
-    return 0 if passed else 1
+                        "agent": transcript.agent, "mode": "replay",
+                        "outcome": outcome, "pass": outcome == PASS})
+    return _outcome_exit(outcome, a.allow_inconclusive)
 
 
-def _print_score(case, passed, rows):
-    print("=== CASE %s: %s ===" % (case["id"], "PASS" if passed else "FAIL"))
-    for scorer, ok, reason in rows:
-        print("  [%s] %-14s %s" % ("OK" if ok else "X", scorer, reason))
-    if not rows:
-        print("  (case khung: 'expect' rỗng - chưa chấm được gì)")
+def _outcome_exit(outcome, allow_inconclusive=False):
+    if outcome == PASS:
+        return 0
+    if outcome == FAIL:
+        return 1
+    # inconclusive: mã thoát riêng, trừ khi người dùng cho phép bỏ qua riêng biệt này.
+    return 0 if allow_inconclusive else INCONCLUSIVE_EXIT
+
+
+_SCORE_LABEL = {PASS: "PASS", FAIL: "FAIL", INCONCLUSIVE: "INCONCLUSIVE"}
+_SCORE_MARK = {PASS: "OK", FAIL: "X", INCONCLUSIVE: "?"}
+
+
+def _print_score(case, outcome, rows):
+    print("=== CASE %s: %s ===" % (case["id"], _SCORE_LABEL.get(outcome, str(outcome).upper())))
+    for scorer, status, reason in rows:
+        print("  [%s] %-14s %s" % (_SCORE_MARK.get(status, "?"), scorer, reason))
+    if outcome == INCONCLUSIVE:
+        print("  (không kết luận: transcript thiếu event tool có cấu trúc - xem evals/README.md)")
 
 
 # --------------------------------------------------------------------------- #
@@ -774,6 +964,7 @@ def add_incident(run_dir, title, entry_id, cases_dir=None, case_id=None, no_kg=F
     case = {
         "id": cid,
         "version": "v0.1",
+        "status": "draft",
         "source": "incident",
         "description": "Sinh từ sự cố: %s" % (title or entry.get("title")),
         "prompt": ("TODO: mô tả lại tình huống sự cố '%s' để agent làm lại và chấm.\n"
@@ -846,6 +1037,9 @@ def main(argv=None):
     p_run.add_argument("--agent-cmd", help="lệnh agent tuỳ biến; '{}' sẽ được thay bằng prompt")
     p_run.add_argument("--case", help="id case (bắt buộc với --behavior)")
     p_run.add_argument("--timeout", type=int, default=600, help="timeout giây cho 1 case hành vi")
+    p_run.add_argument("--allow-inconclusive", action="store_true",
+                       help="coi transcript thiếu event tool là bỏ qua (exit 0) thay vì exit %d"
+                            % INCONCLUSIVE_EXIT)
 
     p_add = sp.add_parser("add-incident", help="sinh case khung từ mục sổ (error/decision)")
     _run_kwargs(p_add)
