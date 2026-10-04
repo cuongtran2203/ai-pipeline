@@ -5,6 +5,9 @@ This repo is a multi-agent workflow: **spec file in → plan + parallel executio
 ## Start
 User says "run ai-pipeline on <spec>" → use skill `ai-pipeline` (`skills/ai-pipeline/SKILL.md`; mirrored in `.claude/skills` and `.agents/skills`). Edit only `skills/`, then `python scripts/sync_skills.py`.
 
+## Chọn agent trước khi chạy song song
+Trước khi dùng worker song song: dùng Orca runtime kiểm tra agent nào khả dụng (`python scripts/agent_roster.py detect`), cho người dùng chọn 1 orchestrator + các worker (code, debate — debate dùng ≥2 agent khác nhau), ghi `runs/<id>/agents.json` (`agent_roster.py select`, skill `ai-pipeline-agents`). `plan_to_orca.py` từ chối tạo/chạy worker khi thiếu `agents.json`. Agent Orca không giám sát được (vd. commandcode) không dùng làm worker.
+
 ## Knowledge graph dự án (Graphify)
 Khi ai-pipeline được init vào một dự án, LUÔN dựng knowledge graph toàn dự án bằng Graphify (skill `ai-pipeline-graph`): cài/chạy theo quy tắc sandbox (hỏi trước khi cài `graphifyy`, ghi vào `decisions.md`), mặc định `--code-only` (không gửi gì ra ngoài), tài liệu chỉ qua backend được duyệt, loại trừ dữ liệu/ảnh/checkpoint/secrets. Cập nhật sau mỗi phase. Tài liệu/sổ thí nghiệm graph bằng Obsidian: `python scripts/obsidian_vault.py --graphify <venv>/graphify` sinh `vault/` (mở bằng Obsidian, xem Graph view). Cần định vị code/tài liệu thì `graphify query|path|explain` trước khi grep. Không chạy `graphify claude|codex install` khi chưa được duyệt.
 

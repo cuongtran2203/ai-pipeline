@@ -153,6 +153,10 @@ def assess(run_dir):
     if ceil_block:
         actions.insert(0, ceil_block)
         blocked.append("ceiling")
+    roster = jload(os.path.join(run_dir, "agents.json"), None)
+    ev["agents"] = roster and {"orchestrator": roster.get("orchestrator"), **roster.get("groups", {})}
+    if not roster:
+        actions.append("Chưa chọn agent: python scripts/agent_roster.py detect, hỏi người dùng, rồi select (skill ai-pipeline-agents)")
     gj = os.path.join(ROOT, "graphify-out", "graph.json")
     ev["graphify"] = {"exists": os.path.exists(gj),
                       "age_days": round((__import__("time").time() - os.path.getmtime(gj)) / 86400, 1) if os.path.exists(gj) else None}

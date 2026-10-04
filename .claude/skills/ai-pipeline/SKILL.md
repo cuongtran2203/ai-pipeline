@@ -9,6 +9,9 @@ Input: a spec file path (see `templates/spec.template.md`). You are the **coordi
 
 **Resuming / "dự án đang ở đâu?"**: if `runs/` already has a run (or the user asks for status), run `ai-pipeline-status` FIRST; it dispatches one assessor agent and tells which phase to execute next. Only then continue.
 
+## Agent roster (before ANY parallel worker)
+Use the Orca runtime to check which agent runtimes are available (`python scripts/agent_roster.py detect`), let the human choose **one orchestrator** and the **worker agents** (code execution; debate — use different agents), record it with `agent_roster.py select` (`ai-pipeline-agents`). `plan_to_orca.py` refuses to create/start workers without `runs/<id>/agents.json`.
+
 ## Knowledge graph (always at init)
 When ai-pipeline is initialised in a project, ALWAYS build the whole-project knowledge graph with Graphify first (`ai-pipeline-graph`: package/location/backend approvals, exclusions, `--code-only` by default) and refresh it after each phase; agents query it (`graphify query|path|explain`) before grepping.
 

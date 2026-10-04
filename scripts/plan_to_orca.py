@@ -83,6 +83,39 @@ def require_git_for_worktrees(tasks):
                  "Run: git init && git add -A && git commit -m init  (or set \"worktree\": \"current\" per task)")
 
 
+GROUP_OF = {"module-dev": "code", "integrator": "code", "error-analyst": "code", "feasibility-analyst": "code",
+            "model-proposer": "debate", "critic": "debate", "architect": "debate"}
+
+
+def load_roster(run_dir):
+    p = os.path.join(run_dir, "agents.json")
+    try:
+        return json.load(open(p, encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+
+
+def assign_agents(tasks, roster):
+    """Make every worker's agent come from the human-selected roster (scripts/agent_roster.py).
+    task.agent absent/"auto" -> round-robin inside the role's group (code | debate | analysis); an explicit agent
+    must be one the human selected for any group. Debate tasks of the same wave get different agents when possible."""
+    g = roster["groups"]
+    allowed = {x for v in g.values() for x in v}
+    counters = {}
+    for t in tasks:
+        if t.get("kind", "worker") != "worker":
+            continue
+        group = GROUP_OF.get(t.get("role", ""), "analysis")
+        pool = g.get(group) or g["code"]
+        if t.get("agent") in (None, "auto"):
+            i = counters.get(group, 0)
+            counters[group] = i + 1
+            t["agent"] = pool[i % len(pool)]
+        elif t["agent"] not in allowed:
+            sys.exit(f"roster error: task {t['id']} wants agent '{t['agent']}' which the human did not select "
+                     f"(selected: {', '.join(sorted(allowed))}). Edit the plan or re-run agent_roster.py select.")
+
+
 def ancestors(tid, by_id):
     """Transitive dependency closure of task tid (symbolic plan ids)."""
     seen, stack = set(), list(by_id.get(tid, {}).get("deps", []))
@@ -239,7 +272,8 @@ def main():
     ap.add_argument("plan")
     ap.add_argument("--run-dir", help="default: runs/<plan.run_id>")
     ap.add_argument("--run", help="existing Orca run id (skip run-create)")
-    ap.add_argument("--agent", default="claude", help="default agent for tasks without one")
+    ap.add_argument("--agent", default="claude", help="default agent for tasks without one (ignored when agents.json exists)")
+    ap.add_argument("--no-roster", action="store_true", help="skip the agent roster gate (documented exception only)")
     g = ap.add_mutually_exclusive_group()
     g.add_argument("--dry-run", action="store_true")
     g.add_argument("--create", action="store_true")
@@ -250,6 +284,13 @@ def main():
     run_dir = a.run_dir or os.path.join("runs", plan.get("run_id", "run"))
     tasks = plan["tasks"]
     workers = [t for t in tasks if t.get("kind", "worker") == "worker"]
+    roster = load_roster(run_dir)
+    if roster:
+        assign_agents(tasks, roster)
+    elif (a.create or a.start_ready) and not a.no_roster:
+        sys.exit("agent roster missing: run `python scripts/agent_roster.py detect`, ask the human to pick the orchestrator and the "
+                 f"code/debate agents, then `python scripts/agent_roster.py select {run_dir} --orchestrator .. --code .. --debate ..` "
+                 "(skills/ai-pipeline-agents). Use --no-roster only for a documented exception.")
 
     if a.create:
         require_orca()
