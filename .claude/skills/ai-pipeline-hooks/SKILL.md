@@ -13,8 +13,8 @@ cuong che bang may: chan truoc khi tool chay (exit code 2 + stderr).
 
 | Rule | Chan khi |
 | ---- | -------- |
-| `label_protection` | Read/Edit/Write/Bash dung duong dan nhan test (`eval_manifest.json`, thu muc nhan, `*.sealed.json`, `seal_audit.jsonl`, `recipe_lock.json`); KECA tim kiem DE QUY (`rg`, `grep -r/-R`, `egrep -r`, `ag`, `git grep`, `find ... -exec`, `findstr /s`, `Select-String -Recurse`, `Get-ChildItem -Recurse | ...`) co goc tim kiem bao phu file nhan; tru `integrator`/`evaluator` |
-| `host_install` | Bash cai goi tren host (`pip/pipx/npm/yarn/apt/conda/brew/cargo/go/uv/poetry/pdm install|add|download|inject|sync`, `easy_install`); CHI tinh tu-lenh that — chuoi trong quote cua lenh khac (`echo`, `git commit -m`, `grep`, heredoc) khong bi chan; cho phep trong `docker exec/run`, `ssh <host> docker ...`, hoac goi trong `allowed_packages` |
+| `label_protection` | Read/Edit/Write/Bash dung duong dan nhan test (`eval_manifest.json`, thu muc nhan, `*.sealed.json`, `seal_audit.jsonl`, `recipe_lock.json`); KECA tim kiem DE QUY (`rg`, `grep -r/-R`, `egrep -r`, `ag`, `git grep`, `find ... -exec`, `findstr /s`, `dir /s`, `Select-String -Recurse`, `Get-ChildItem -Recurse | ...`) co goc tim kiem bao phu file nhan; tru `integrator`/`evaluator` |
+| `host_install` | Bash cai goi tren host (`pip/pipx/npm/yarn/apt/conda/brew/cargo/go/uv/poetry/pdm install|add|download|inject|sync`, `uv pip install`, `easy_install`); CHI tinh tu-lenh that — chuoi trong quote cua lenh khac (`echo`, `git commit -m`, `grep`, heredoc) khong bi chan; payload `-c`/`/c` duoc tach (`; && || |`) va quet tung lenh; cho phep trong `docker exec/run`, `ssh <host> docker ...`, hoac khi MOI goi deu khop CHINH XAC `allowed_packages` theo argv |
 | `dangerous_docker` | `--privileged`, `--net/--network host`, `docker system prune`, `docker rm -f` container khong phai `aipipeline-<run>-*` |
 | `ownership` | Edit/Write ngoai duong dan `owns` cua task (thieu file ownership -> bo qua) |
 | `bugfix_tests` | Task bugfix sua file trong `tests/` |
@@ -33,9 +33,10 @@ Tat/bat tung rule trong `runs/<id>/guard_policy.json` hoac
    mo rong `owns`, hoac tat rule trong `guard_policy.json` (ghi vao
    `decisions.md`). TUYET DOI khong sua `scripts/pipeline_guard.py`
    de vuot kiem tra.
-4. Role lay tu `AI_PIPELINE_ROLE`, hoac tu task trong
+4. Role CHI tu task trong
    `<run>/task_context.json` (`{"tasks": {<TASK_ID>: {role, owns, bugfix}}}`),
-   KHONG tu tham so tu khai trong tool call (hook bo qua truong role
+   KHONG tu bien moi truong `AI_PIPELINE_ROLE` (da bo: tin cay yeu, tu khai)
+   va KHONG tu tham so tu khai trong tool call (hook bo qua truong role
    trong event). Khong tim duoc task -> role rong (fail-closed: van chan nhan).
 
 ## Cap role tu dong (coordinator chay truoc khi start worker)
@@ -51,10 +52,32 @@ python scripts/pipeline_guard.py context write runs/<id>   # plan.json -> task_c
 ghi `<run>/task_context.json`. Khi hook chay, task duoc chon theo:
 
 1. Bien moi truong `AI_PIPELINE_TASK=<TASK_ID>` (uu tien; coordinator truyen
-   cho worker luc start, cung voi `AI_PIPELINE_RUN_DIR=<run_dir>`), hoac
+   cho worker luc start, cung voi `AI_PIPELINE_RUN_DIR=<run_dir>`; so khop
+   khong phan biet hoa thuong), hoac
 2. Ten worktree/thu muc cwd dang `<run_id>-<task_id>` (chu thuong, vi du
-   `ai-pipeline-v2-fh`; `plan_to_orca.py` dat ten worktree `--name
-   <run>-<task>` nen khop tu dong).
+   `rr-i1` cho run `rr` task `I1`, `my-run-t2` cho run `my-run` task `T2`;
+   `plan_to_orca.py` dat ten worktree `--name <run_id>-<task_id lowercase>`
+   nen khop tu dong; so khop khong phan biet hoa thuong, ho tro run_id
+   co dau `-`).
+
+## allowed_packages: khop chinh xac theo argv
+
+`allowed_packages` trong policy CHI cho qua khi MOI goi cua MOI tu-lenh
+cai dat deu khop CHINH XAC danh sach (chuan hoa `_`/`-`/hoa-thuong;
+`Safe_Lib` == `safe-lib==2.0` == `safe_lib[extra]`). Substring KHONG tinh
+(`allowed ["safe"]` khong mo `pip install unsafe evil`). Cac nguon khong
+kiem duoc luon DENY: `-r/--requirement file`, `-c constraints`, `-e editable`,
+URL/`git+`/duong dan/file archive, `poetry install`/`uv sync` (khoa lockfile
+khong liet ke goi). Flag nhan gia tri (`--index-url ...`, `-U` rieng le)
+duoc bo dung cach khi parse.
+
+## Policy hong: deny nhom ghi, van cho Read
+
+`guard_policy.json` hong/khong doc duoc -> fail-closed: dung policy mac dinh
+de chan R1/R3, DENY nhom ghi (`Edit`/`Write`/`Bash`, ke ca `MultiEdit`/
+`NotebookEdit`) kem thong diep cau hinh ro (`policy_config`), van cho
+`Read` thuong; tat R4/R5. Moi quyet dinh van ghi audit (`policy_corrupt: true`).
+Sua/xoa file policy roi chay lai; can ngoai le hoi coordinator qua `ask`.
 
 Kiem tra nhanh: `AI_PIPELINE_TASK=FH AI_PIPELINE_RUN_DIR=runs/<id>
 python scripts/pipeline_guard.py --check --tool Read \
@@ -73,10 +96,16 @@ python scripts/pipeline_guard.py --check --tool Bash --input '{"command":"pip in
 ## Cai/go hook (Claude Code)
 
 ```sh
-ai-pipeline hooks install --path <du-an>    # merge, giu hook cua ban
+ai-pipeline hooks install --path <du-an>    # tao NHOM RIENG matcher du, giu hook cua ban
 ai-pipeline hooks status --path <du-an>
-ai-pipeline hooks uninstall --path <du-an>  # go sach muc cua ai-pipeline
+ai-pipeline hooks uninstall --path <du-an>  # chi go nhom/handler cua ai-pipeline
 ```
+
+`install` LUON tao mot nhom `PreToolUse` RIENG voi matcher
+`Read|Edit|MultiEdit|Write|NotebookEdit|Bash|Grep|Glob`; KHONG bao gio chen
+guard vao nhom cua ban hay sua/de matcher cua ban (loi RV5: guard tung bi gan
+vao nhom matcher `Read` nen Bash khong kich hoat guard). `uninstall` chi go
+handler/nhom co marker cua ai-pipeline (van don duoc nhom tron cu).
 
 Khoi mau: `templates/hooks.settings.template.json`.
 
@@ -99,7 +128,12 @@ KHONG bia co che tu dong. Chi co:
   Windows symlink can quyen tao nen chi kiem chung khi tao duoc).
 - Tim kiem de quy duoc CHO QUA khi tim trong thu muc con khong chua file
   nhan, hoac khi da loai nhan bang glob/--exclude khop that
-  (`--glob '!*sealed*'`, `--exclude='*.json'`, pathspec `:!...`).
+  (`--glob '!*sealed*'`, `--exclude='*.json'`, `--glob '!eval_manifest.json'`
+  cho file nhan cu the; pathspec `:!...`). Exclude khong lien quan
+  (`--glob '!*.png'`) van bi chan; duong dan nhan that trong lenh khac
+  (vd. `cat eval_manifest.json`) van bi chan du co exclude.
+- `findstr` khong `/s`, `dir` khong `/s`, grep don file: khong phai tim kiem
+  de quy, cho qua binh thuong.
 - Tool khong thuoc Read/Edit/Write/Bash (vd. NotebookEdit, MCP tool ghi
   file) hien khong bi kiem tra.
 - Hook het timeout thi Claude Code CHO QUA (khong chan) — giu guard nhanh,

@@ -135,9 +135,35 @@ flowchart LR
     CG -->|"graphify query"| AG
 ```
 
+## Cưỡng chế, eval và giám sát (vòng kín sau release)
+
+```mermaid
+flowchart LR
+    CFG["Đổi skill, roles, AGENTS.md, hook"] --> EV["evals.py run --static<br/>CI + pre-commit"]
+    EV -->|"xanh"| MERGE["Merge"]
+    EV -->|"đỏ"| FIX["Sửa cấu hình"]
+    WORK["Agent làm việc"] --> HOOK["pipeline_guard (PreToolUse)<br/>chặn nhãn test, cài gói host,<br/>docker nguy hiểm, ghi ngoài owns"]
+    HOOK --> AUD["guard_audit.jsonl"]
+    PROD(["Model production"]) --> MON["monitor.py check<br/>band 1σ / 2σ / 3σ + PSI / KS"]
+    MON -->|"1σ"| LOG["Ghi log"]
+    MON -->|"2σ"| DIA["Chẩn đoán chỉ đọc"]
+    MON -->|"3σ"| INC["Incident = intent<br/>đề xuất rollback hoặc vòng sửa"]
+    INC --> G1["Người duyệt G1/G2<br/>rồi vào lại pipeline"]
+    INC --> CASE["evals.py add-incident<br/>sự cố thành case vĩnh viễn"]
+    CASE --> EV
+```
+
+| Lớp | Lệnh | Chức năng |
+|---|---|---|
+| Hook | `ai-pipeline hooks install\|status\|uninstall` | merge nhóm hook riêng vào `.claude/settings.json` (không đụng hook của bạn); `python scripts/pipeline_guard.py context write <run_dir>` cấp role/ownership theo task |
+| Eval | `python scripts/evals.py run --static` / `--changed` / `--replay <transcript> --case ID` / `add-incident` | kiểm cấu hình agent; chấm hành vi theo event tool; sự cố thành case |
+| Giám sát | `python scripts/monitor.py record\|ingest\|check\|drift\|list\|dismiss\|resolve\|reconcile` | band theo hướng tốt/xấu, `min_n`, stale, PSI/KS; incident ghi vào đồ thị tri thức và sổ |
+
+Hook cho Claude Code; Codex không có hook tương đương đã xác minh nên dùng `pipeline_guard.py --check` thủ công hoặc trong CI. Hook là bộ lọc lệnh chứ không phải sandbox: các cách vòng đã biết (lệnh mã hoá base64, biến shell, `python -c` gọi subprocess) được liệt kê trong skill `ai-pipeline-hooks`.
+
 ### Những gì quy trình chưa tự động hóa
 
-Để không hiểu nhầm mức hoàn thiện: **giám sát sau release (drift, canary, rollback)** mới có chế độ `monitor` trong schema, chưa có công cụ tự động; chưa có CI/CD cho model; experiment tracker/model registry chỉ ở dạng sổ thí nghiệm và đồ thị tri thức; `seal` bảo vệ nhãn test ở mức quy trình, không phải ranh giới bảo mật filesystem.
+Để không hiểu nhầm mức hoàn thiện: **CI/CD cho model** (huấn luyện lại, canary, rollback tự động) chưa có, giám sát mới dừng ở phát hiện và mở incident; experiment tracker/model registry chỉ ở dạng sổ thí nghiệm và đồ thị tri thức; behavioral eval chưa chạy hàng loạt trên agent thật; hook chưa được kiểm trong phiên Claude Code tương tác thật; `seal` bảo vệ nhãn test ở mức quy trình, không phải ranh giới bảo mật filesystem (cần mount/ACL ngoài checkout).
 
 ## Cài đặt
 
@@ -197,6 +223,7 @@ Tính chất: chạy lại `init` nhiều lần cho kết quả giống nhau (id
 | `ai-pipeline validate <spec>` | liệt kê câu hỏi còn thiếu cho G1 |
 | `ai-pipeline plan plan.json [--dry-run \| --create \| --start-ready]` | DAG → task/worker trên Orca |
 | `ai-pipeline report eval.json` | `report.md` (3 phần, tiếng Việt) + `report.html` (gom cụm lỗi) |
+| `ai-pipeline hooks install\|status\|uninstall` | cài/gỡ hook cưỡng chế (merge, không đè settings) |
 | `ai-pipeline pack list\|status\|install\|build\|uninstall [graphify\|obsidian] [--yes]` | cài/build pack tuỳ chọn (xem mục Pack) |
 | `ai-pipeline run <script> [args]` | chạy bất kỳ `scripts/<script>.py`; alias: `notebook kg agents diagram cleanup autonomy supervisor seal vault sync-skills` |
 
@@ -228,9 +255,9 @@ Tạo thư mục `skills/<tên-skill>/SKILL.md` rồi `ai-pipeline sync-skills` 
 
 ```
 .ai-pipeline/AGENTS.md   luật chung của workflow (hoặc đọc qua AGENTS.md của bạn)
-skills/                  17 skill: ai-pipeline, -intake, -analysis, -planning, -module-dev, -integration,
+skills/                  20 skill: ai-pipeline, -intake, -analysis, -planning, -module-dev, -integration,
                          -report, -orca, -status, -feasibility, -notebook, -graph, -agents, -sandbox,
-                         -diagnose, -knowledge, -autonomy
+                         -diagnose, -knowledge, -autonomy, -hooks, -evals, -monitor
 .claude/skills/  .agents/skills/   bản sao cho Claude Code / Codex (theo --agent)
 roles/                   prompt role dùng chung cho 2 runtime
 templates/  schemas/     spec, report, playbook, autonomy policy; plan/eval/kg schema
@@ -249,7 +276,8 @@ scripts/                 validate_spec, plan_to_orca, render_report, project_sta
 ## Phát triển repo này
 
 ```bash
-python -m unittest discover -s tests     # 130+ test, stdlib
+python -m unittest discover -s tests     # 340+ test, stdlib
+python scripts/evals.py run --static     # eval cấu hình agent (CI)
 python scripts/sync_skills.py --check    # skills/ là nguồn chuẩn, .claude/ và .agents/ là bản sao
 pip install .                            # build wheel (đóng gói skills/roles/... vào ai_pipeline/payload)
 ```
