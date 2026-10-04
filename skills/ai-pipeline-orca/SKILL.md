@@ -26,6 +26,17 @@ Rules from the Orca guide that matter here: a timeout/empty wait is a checkpoint
 - A probe/train/build worker runs in its own worktree; the integrator merges its branch into master; remove merged worktrees afterwards with `orca worktree rm --worktree branch:<name>`.
 - A worker agent not known to Orca (e.g. commandcode) cannot be supervised: use a recognised `--agent`, or drive its terminal manually and confirm by output files.
 
+## Review checklist (mandatory before merging/committing any worker output)
+Lessons from the v2 waves (RV3 found defects that the workers' own tests and a first coordinator pass missed). For every worker branch or owned-file change:
+1. **Scope:** `git diff --stat` touches only Ownership (+ allowed derived mirrors); no secrets/binaries/data; nothing outside the task.
+2. **Run it yourself:** the full suite (`python -m unittest discover -s tests`), plus the backward-compat commands (old plan `--dry-run`, `project_status`, `render_report`, example plans).
+3. **Bite check:** copy the worker's new tests onto the code *before* the change (or revert the core fix on a temp copy): they must fail. Tests that pass either way prove nothing.
+4. **Every writer, not just the changed one:** `grep` the whole repo for direct writes to the shared files the change is about (state JSON/JSONL, KG, audit); an API fix is not closed while another script still bypasses it.
+5. **Failure paths:** fault after the Orca receipt but before the state write, worker-start failure (rollback), missing receipt, corrupt vs missing vs empty state file (must not be overwritten), two coordinators/processes at once (stress with real processes), Windows paths/BOM.
+6. **Live state:** run migrations and new logic on a *copy* of the real run's state before merging.
+7. **Verdict wording:** CLOSED / PARTIAL / OPEN per original finding, with the probe that shows it; record the review in the notebook (`decision`).
+Ask a second model (e.g. codex `gpt-6-sol` via a read-only critic task) to attack the result when the change touches gates, caps, state files or the test seal.
+
 ## Close and delete reviewed branches
 After a worker is settled (`worker_done` succeeded, `task_id` in `done.json`) the orchestrator **reviews** it: acceptance line met, `git diff master...<branch> --stat` shows only owned paths, no secrets/binaries/data/checkpoints, tests/parity evidence present. If the review finds nothing wrong, **close and delete the branch**: `python scripts/branch_cleanup.py runs/<id>` (dry run) then `... --apply --reviewed <TASK_IDS>`. The script merges new tracked paths (`--no-ff`), restores ignored files into the run dir, tags unmerged tips as `archive/<branch>`, then `orca worktree rm` (no `--force`) and deletes the branch; it refuses on a dirty worktree, a task not in `done.json`, or a dirty master. If the review finds a problem: keep the branch, send the worker feedback or retry; never delete it.
 
