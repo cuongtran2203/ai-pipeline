@@ -17,6 +17,7 @@ Phân tích và kiểm định dataset; đây là phần quan trọng nhất.
 - Có data real: bắt buộc gán nhãn tập eval real (tối thiểu 50 mẫu); chia train/val/test; chỉ real mới lộ điểm mạnh/yếu.
 - Không có real: bàn kỹ cách sinh để phân bố synth sát real nhất.
 - Đề xuất tiền xử lý dựa trên quan sát data.
+- Dữ liệu ít (vài trăm mẫu trở xuống) hoặc chỉ có synthetic: BẮT BUỘC có mục "Kế hoạch sinh dữ liệu" trong `data_analysis.md`: thành phần sinh (in / viết tay / augment), nguồn gốc từng thành phần (chỉ từ train fold), rủi ro synthetic-of-synthetic, cách ablation chứng minh có ích, version `ds-v2-synth`. Không chỉ nêu ý tưởng chung chung.
 - So sánh phân bố train vs test (nguồn, chất lượng, lớp, độ khó); nếu lệch đáng kể thì nêu đầu tiên trong báo cáo.
 
 ## Đầu ra
