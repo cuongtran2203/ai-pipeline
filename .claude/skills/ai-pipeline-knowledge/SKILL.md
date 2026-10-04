@@ -79,10 +79,21 @@ kg.add_edge_checked(run_dir, source, target, type, valid_from=None, ..., allow_d
 ```
 API validate enum, tồn tại node, kiểu đầu–cuối, thứ tự thời gian (`valid_from <= valid_to`) và `confidence`; sai thì ném `kg.KgError` rõ ràng. Ghi lặp cùng `(source, target, type)` là idempotent.
 
-> **Lưu ý output của task:** không có loại cạnh nào trong 8 loại diễn đạt quan hệ "task sinh ra artifact". `uses` chỉ mang nghĩa task **dùng** artifact. Vì vậy `settle_task.py` **không phát cạnh output** mà ghi danh sách `outputs` vào `properties` của thực thể `Task`. Nếu cần biểu diễn quan hệ này, phải đề xuất loại cạnh mới (vd. `produced`) và được người dùng duyệt ở vòng thiết kế sau.
+**Khóa và tính giao dịch (RV3 wave-3):**
+- Mọi ghi entity/edge chạy dưới **khóa mức đồ thị** `knowledge/graph.lock`; thao tác check-then-append không bị tiến trình khác chen vào, hai worker upsert/cạnh trùng song song vẫn idempotent theo khóa (không sinh bản trùng).
+- `allow_dangling=True` **CHỈ** nới trường hợp endpoint **THIẾU** (backfill theo thứ tự). Endpoint **đã tồn tại nhưng sai kiểu LUÔN bị từ chối** — không được lấy `allow_dangling` để đưa cạnh sai kiểu vào đồ thị.
+- `init`/`backfill` ghi atomic: dựng vào một graph tạm rồi swap từng file bằng `os.replace`, không để lại file nửa chừng.
+- Ghi file trạng thái chung (`done.json`, `notebooklm.json`, pending...) qua `scripts/statefile.py` (`update_json`/`append_jsonl`). Không lồng khóa: commit từng file rồi ghi pending sync, KG và notebook không giữ khóa chồng lên nhau.
+
+> **Lưu ý output của task:** không có loại cạnh nào trong 8 loại diễn đạt quan hệ "task sinh ra artifact". `uses` chỉ mang nghĩa task **dùng** artifact. Vì vậy `settle_task.py` **không phát cạnh output** mà ghi danh sách `outputs` (path kèm version tag) vào `properties` của thực thể `Task`. Quan hệ `produced` là **quyết định thiết kế đang chờ người dùng duyệt** (xem `runs/ai-pipeline-v2/artifacts/FE/README.md`); không tự thêm loại cạnh mới khi chưa duyệt.
 
 ### ID ổn định cho notebook
-`notebook.py log` gắn khóa nguồn ổn định `run#<ordinal>-<hash8>` vào trường `id` của mục journal; ID thực thể KG suy từ khóa này nên **tiêu đề trùng không đụng ID**. `refs` giữ **đường dẫn tương đối từ gốc dự án** (kèm `version` nếu nhận ra), không dùng basename. Mục journal cũ không có `id` vẫn đọc/export được (khóa nguồn được suy lại xác định).
+`notebook.py log` gắn khóa nguồn ổn định `run#<ordinal>-<hash8>-<uuid8>` vào trường `id` của mục journal. Ordinal được cấp **dưới khóa journal** nên hai worker đồng thời không đụng ordinal và không mất mục; UUID khiến hai mục giống hệt trong cùng một phút vẫn thành hai node khác nhau. ID thực thể KG suy từ khóa này nên **tiêu đề trùng / nội dung trùng không đụng ID**. `refs` giữ **đường dẫn chuẩn hoá theo gốc dự án** (`runs/x/../y/a.json` == `runs/y/a.json`, POSIX separators, kèm `version` nếu nhận ra); ref nằm **ngoài gốc dự án bị từ chối/đánh dấu**, không sinh `../../..`.
+
+Mục journal **cũ không có `id`** được cấp khóa nguồn ổn định **một lần** khi migration (kèm backup `journal.jsonl.bak-<ts>`), lưu thẳng vào `journal.jsonl`; về sau không tái tính theo vị trí, nên hai mục giống hệt vẫn là hai node. `journal.md`/`insights.md` được rebuild atomic từ snapshot.
+
+### Pending sync & reconcile
+Nếu đồng bộ KG lỗi, `settle_task.py` ghi `knowledge/sync_pending.json`, `notebook.py` ghi `notebook/sync_pending.json` — **không** làm hỏng `done.json`/journal. Chạy lại bằng `settle_task.py <run_dir> --reconcile` hoặc `notebook.py reconcile <run_dir>`.
 
 ### Khi nào Ghi (Write Rules)
 - **Tự động qua `notebook.py log`**:
@@ -129,6 +140,13 @@ python scripts/kg.py add-entity runs/<id> --id decision:norm-break --type Decisi
 
 # Thêm cạnh có kiểu
 python scripts/kg.py add-edge runs/<id> --source decision:norm-break --target decision:raw-break --type supersedes --valid-from "2026-10-03 20:58"
+
+# Backfill theo thứ tự khi endpoint còn thiếu (chỉ nới THIẾU endpoint; sai kiểu vẫn bị từ chối)
+python scripts/kg.py add-edge runs/<id> --source task:T --target artifact:runs/<id>/x.json --type uses --allow-dangling
+
+# Retry đồng bộ KG còn pending sau khi done.json đã commit
+python scripts/settle_task.py runs/<id> --reconcile
+python scripts/notebook.py reconcile runs/<id>
 
 # Kiểm tra tính toàn vẹn (enum, đầu/cuối, thứ tự thời gian)
 python scripts/kg.py validate runs/<id>

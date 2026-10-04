@@ -1,24 +1,35 @@
 #!/usr/bin/env python3
 """Per-problem lab notebook: experiment journal + distilled insights, exportable to NotebookLM.
 
-  notebook.py init   <run_dir> [--title T]
-  notebook.py log    <run_dir> --type experiment|decision|insight|research|error|gate --title T --body B
-                     [--tags a,b] [--metrics '{"val_acc":0.9866}'] [--refs path1,path2] [--author who]
-  notebook.py export <run_dir>            -> notebook/export/notebook-<date>.md  (one markdown source to upload)
-  notebook.py show   <run_dir> [--type X] [--last N]
+  notebook.py init      <run_dir> [--title T]
+  notebook.py log       <run_dir> --type experiment|decision|insight|research|error|gate --title T --body B
+                        [--tags a,b] [--metrics '{"val_acc":0.9866}'] [--refs path1,path2] [--author who]
+  notebook.py export    <run_dir>            -> notebook/export/notebook-<date>.md (one markdown source to upload)
+  notebook.py show      <run_dir> [--type X] [--last N]
+  notebook.py reconcile <run_dir>            -> retry pending KG syncs recorded in notebook/sync_pending.json
 
 Layout: <run_dir>/notebook/{journal.jsonl (source of truth, append-only), journal.md, insights.md,
-        notebooklm.json, export/}. Stdlib only; safe to call from several workers (append + lock-free).
-`insights.md` is the curated "đúc kết" section: it is rebuilt from entries of type insight/decision.
+        notebooklm.json, export/}. Stdlib only.
+
+Concurrency: the journal ordinal + append, and the markdown rebuild, are protected by inter-process
+locks; a new entry gets a UUID in its source key so identical entries never collide and an entry is
+never lost. Legacy entries without `id` get a stable key exactly once (journal.jsonl.bak-<ts> backup)
+instead of being recomputed by position on every read. KG writes go through the validated kg.py API;
+a sync failure is recorded in notebook/sync_pending.json instead of being swallowed silently.
+`insights.md` is the curated "đúc kết" section rebuilt from entries of type insight/decision.
 """
 import argparse
 import datetime as dt
 import json
 import os
+import shutil
 import sys
+import tempfile
+import uuid
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import kg  # noqa: E402  (validated single write API for the knowledge graph)
+import statefile  # noqa: E402  (transactional JSON writes)
 
 sys.stdout.reconfigure(encoding="utf-8")
 sys.stderr.reconfigure(encoding="utf-8")
@@ -30,20 +41,110 @@ def nb_dir(run_dir):
     return os.path.join(os.path.abspath(run_dir), "notebook")
 
 
-def read_entries(run_dir):
-    p = os.path.join(nb_dir(run_dir), "journal.jsonl")
+def journal_path(run_dir):
+    return os.path.join(nb_dir(run_dir), "journal.jsonl")
+
+
+def _journal_guard(run_dir):
+    """Guard for the journal critical section (ordinal+append). Distinct from journal.jsonl.lock."""
+    return os.path.join(nb_dir(run_dir), ".journal")
+
+
+def _render_guard(run_dir):
+    return os.path.join(nb_dir(run_dir), ".render")
+
+
+def _sync_pending_path(run_dir):
+    return os.path.join(nb_dir(run_dir), "sync_pending.json")
+
+
+def _now():
+    return dt.datetime.now().strftime("%Y-%m-%d %H:%M")
+
+
+def _atomic_write_text(path, text):
+    directory = os.path.dirname(os.path.abspath(path))
+    os.makedirs(directory, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(prefix="." + os.path.basename(path) + ".", suffix=".tmp", dir=directory)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as f:
+            f.write(text)
+            f.flush()
+            os.fsync(f.fileno())
+        statefile._replace_atomic(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
+def _atomic_write_jsonl(path, rows):
+    _atomic_write_text(path, "".join(json.dumps(e, ensure_ascii=False) + "\n" for e in rows))
+
+
+def _read_text(path):
+    with open(path, encoding="utf-8") as f:
+        return f.read()
+
+
+def _read_raw_entries(run_dir):
+    p = journal_path(run_dir)
     if not os.path.exists(p):
         return []
     out = []
-    with open(p, encoding="utf-8") as f:
+    with open(p, encoding="utf-8-sig") as f:
         for line in f:
             line = line.strip()
-            if line:
-                try:
-                    out.append(json.loads(line))
-                except ValueError:
-                    pass
+            if not line:
+                continue
+            try:
+                out.append(json.loads(line))
+            except ValueError:
+                pass
     return out
+
+
+def ensure_journal_ids(run_dir):
+    """Assign a stable source key to legacy entries exactly once, with a backup.
+
+    Legacy entries (no `id`) are keyed by position at migration time and the ids are persisted,
+    so two identical entries become two distinct nodes and later re-reads never recompute them.
+    """
+    jp = journal_path(run_dir)
+    if not os.path.exists(jp):
+        return []
+    entries = _read_raw_entries(run_dir)
+    if not any(not e.get("id") for e in entries):
+        return entries  # fast path: nothing to migrate, no lock contention with the append path
+    with statefile.file_lock(_journal_guard(run_dir)):
+        entries = _read_raw_entries(run_dir)
+        missing = [i for i, e in enumerate(entries) if not e.get("id")]
+        if not missing:
+            return entries
+        backup = jp + ".bak-" + dt.datetime.now().strftime("%Y%m%d-%H%M%S")
+        shutil.copyfile(jp, backup)
+        for i in missing:
+            entries[i]["id"] = kg.source_entry_id(run_dir, i, entries[i])
+        _atomic_write_jsonl(jp, entries)
+        print(f"notebook: cấp id cho {len(missing)} mục cũ; backup {backup}", file=sys.stderr)
+        return entries
+
+
+def read_entries(run_dir, migrate=False):
+    if migrate:
+        return ensure_journal_ids(run_dir)
+    return _read_raw_entries(run_dir)
+
+
+def new_entry_id(run_dir, index, entry):
+    """Source key for a fresh entry: run + ordinal + content hash + UUID.
+
+    The UUID makes two identical entries in the same minute distinct, so they never merge into
+    one KG node and no counter/timestamp collision can drop an entry.
+    """
+    return f"{kg.source_entry_id(run_dir, index, entry)}-{uuid.uuid4().hex[:8]}"
 
 
 def fmt_entry(e):
@@ -59,30 +160,41 @@ def fmt_entry(e):
 
 def rebuild(run_dir):
     d = nb_dir(run_dir)
-    es = read_entries(run_dir)
+    es = ensure_journal_ids(run_dir)
     meta = {}
     try:
-        meta = json.load(open(os.path.join(d, "notebooklm.json"), encoding="utf-8"))
+        with open(os.path.join(d, "notebooklm.json"), encoding="utf-8-sig") as f:
+            meta = json.load(f)
     except (OSError, ValueError):
         pass
     title = meta.get("title", os.path.basename(os.path.abspath(run_dir)))
-    with open(os.path.join(d, "journal.md"), "w", encoding="utf-8") as f:
-        f.write(f"# Sổ thí nghiệm: {title}\n\nTheo thứ tự thời gian. Nguồn gốc: `journal.jsonl`.\n\n" + "\n".join(fmt_entry(e) for e in es))
+    journal_md = (f"# Sổ thí nghiệm: {title}\n\nTheo thứ tự thời gian. Nguồn gốc: `journal.jsonl`.\n\n"
+                  + "\n".join(fmt_entry(e) for e in es))
     keep = [e for e in es if e["type"] in ("insight", "decision")]
-    with open(os.path.join(d, "insights.md"), "w", encoding="utf-8") as f:
-        f.write(f"# Đúc kết & quyết định: {title}\n\n" + ("\n".join(fmt_entry(e) for e in keep) if keep else "_Chưa có._\n"))
+    insights_md = (f"# Đúc kết & quyết định: {title}\n\n"
+                   + ("\n".join(fmt_entry(e) for e in keep) if keep else "_Chưa có._\n"))
+    # Rebuild from the snapshot under the render lock so two workers never interleave a partial md.
+    with statefile.file_lock(_render_guard(run_dir)):
+        _atomic_write_text(os.path.join(d, "journal.md"), journal_md)
+        _atomic_write_text(os.path.join(d, "insights.md"), insights_md)
 
 
 def cmd_init(a):
     d = nb_dir(a.run_dir)
     os.makedirs(os.path.join(d, "export"), exist_ok=True)
-    p = os.path.join(d, "notebooklm.json")
-    if not os.path.exists(p):
-        json.dump({"title": a.title or os.path.basename(os.path.abspath(a.run_dir)), "notebook_url": "",
-                   "sources_uploaded": [], "last_export": "", "note": "NotebookLM notebook/sources are created by the human; see skills/ai-pipeline-notebook"},
-                  open(p, "w", encoding="utf-8"), ensure_ascii=False, indent=2)
-    if not os.path.exists(os.path.join(d, "journal.jsonl")):
-        open(os.path.join(d, "journal.jsonl"), "w", encoding="utf-8").close()
+    meta = {"title": a.title or os.path.basename(os.path.abspath(a.run_dir)), "notebook_url": "",
+            "sources_uploaded": [], "last_export": "",
+            "note": "NotebookLM notebook/sources are created by the human; see skills/ai-pipeline-notebook"}
+    statefile.update_json(os.path.join(d, "notebooklm.json"),
+                          lambda data: data if isinstance(data, dict) and data else meta, default={})
+    jp = journal_path(a.run_dir)
+    if not os.path.exists(jp):
+        try:
+            fd = os.open(jp, os.O_CREAT | os.O_WRONLY | os.O_EXCL, 0o644)
+        except FileExistsError:
+            pass
+        else:
+            os.close(fd)
     rebuild(a.run_dir)
     print("notebook ready:", d)
 
@@ -92,69 +204,86 @@ def slug(s, n=48):
     return kg.slug(s, n)
 
 
-def sync_to_kg(run_dir, e, kg_edges_arg=None):
-    """Write notebook knowledge through kg.py's validated API (no direct JSONL append).
+def _sync_entry(run_dir, e, kg_edges_arg=None):
+    """Write notebook knowledge through kg.py's validated API. Raises on any KG error."""
+    type_map = {
+        "decision": "Decision",
+        "gate": "Decision",
+        "experiment": "Experiment",
+        "research": "Experiment",
+        "insight": "Experiment",
+        "error": "Incident",
+    }
+    kg_type = type_map.get(e["type"], "Experiment")
+    prefix = {"Decision": "decision", "Experiment": "exp", "Incident": "incident"}.get(kg_type, "node")
+    src_id = e.get("id") or kg.source_entry_id(run_dir, 0, e)
+    eid = f"{prefix}:{kg.slug(src_id)}"
 
-    Entity id is derived from the entry's stable source key (run + journal ordinal + hash),
-    so duplicate titles never collide. Refs keep their project-root-relative path."""
-    try:
-        type_map = {
-            "decision": "Decision",
-            "gate": "Decision",
-            "experiment": "Experiment",
-            "research": "Experiment",
-            "insight": "Experiment",
-            "error": "Incident",
-        }
-        kg_type = type_map.get(e["type"], "Experiment")
-        prefix = {"Decision": "decision", "Experiment": "exp", "Incident": "incident"}.get(kg_type, "node")
-        src_id = e.get("id") or kg.source_entry_id(run_dir, 0, e)
-        eid = f"{prefix}:{kg.slug(src_id)}"
+    kg.upsert_entity(
+        run_dir, eid, kg_type, e["title"], body=e["body"],
+        properties={
+            "author": e.get("author"),
+            "tags": e.get("tags", []),
+            "metrics": e.get("metrics", {}),
+            "refs": e.get("refs", []),
+            "source_key": src_id,
+        },
+        created_at=e["ts"],
+    )
 
-        kg.upsert_entity(
-            run_dir, eid, kg_type, e["title"], body=e["body"],
-            properties={
-                "author": e.get("author"),
-                "tags": e.get("tags", []),
-                "metrics": e.get("metrics", {}),
-                "refs": e.get("refs", []),
-                "source_key": src_id,
-            },
-            created_at=e["ts"],
-        )
+    author = e.get("author") or "agent"
+    author_id = f"person:{kg.slug(author)}"
+    kg.upsert_entity(run_dir, author_id, "Person", author,
+                     properties={"alias": author}, created_at=e["ts"])
 
-        author = e.get("author") or "agent"
-        author_id = f"person:{kg.slug(author)}"
-        kg.upsert_entity(run_dir, author_id, "Person", author,
-                         properties={"alias": author}, created_at=e["ts"])
+    if kg_type == "Decision":
+        kg.add_edge_checked(run_dir, eid, author_id, "decided_by", valid_from=e["ts"],
+                            recorded_at=e["ts"], source_ref=f"notebook:{e['ts']}")
 
-        if kg_type == "Decision":
-            kg.add_edge_checked(run_dir, eid, author_id, "decided_by", valid_from=e["ts"],
-                                recorded_at=e["ts"], source_ref=f"notebook:{e['ts']}")
+    for r in e.get("refs", []):
+        clean_r = kg.normalize_ref_path(r)
+        if not clean_r:
+            print(f"Warning: bỏ qua ref ngoài gốc dự án: {r}", file=sys.stderr)
+            continue
+        art_id = kg.upsert_artifact_ref(run_dir, clean_r, created_at=e["ts"])
+        edge_type = "evaluated_on" if kg_type == "Experiment" else ("evidenced_by" if kg_type == "Decision" else None)
+        if edge_type:
+            kg.add_edge_checked(run_dir, eid, art_id, edge_type, valid_from=e["ts"],
+                                recorded_at=e["ts"], source_ref=clean_r)
 
-        for r in e.get("refs", []):
-            clean_r = kg.normalize_ref_path(r)
-            if not clean_r:
+    if kg_edges_arg:
+        for item in kg_edges_arg.split(","):
+            item = item.strip()
+            if not item or ":" not in item:
                 continue
-            art_id = kg.upsert_artifact_ref(run_dir, clean_r, created_at=e["ts"])
-            edge_type = "evaluated_on" if kg_type == "Experiment" else ("evidenced_by" if kg_type == "Decision" else None)
-            if edge_type:
-                kg.add_edge_checked(run_dir, eid, art_id, edge_type, valid_from=e["ts"],
-                                    recorded_at=e["ts"], source_ref=clean_r)
+            etype, tgt = (x.strip() for x in item.split(":", 1))
+            try:
+                kg.add_edge_checked(run_dir, eid, tgt, etype, valid_from=e["ts"],
+                                    recorded_at=e["ts"], source_ref=f"notebook:{e['ts']}")
+            except kg.KgError as ex:
+                print(f"Warning: bỏ qua cạnh KG không hợp lệ ({etype} -> {tgt}): {ex}", file=sys.stderr)
 
-        if kg_edges_arg:
-            for item in kg_edges_arg.split(","):
-                item = item.strip()
-                if not item or ":" not in item:
-                    continue
-                etype, tgt = (x.strip() for x in item.split(":", 1))
-                try:
-                    kg.add_edge_checked(run_dir, eid, tgt, etype, valid_from=e["ts"],
-                                        recorded_at=e["ts"], source_ref=f"notebook:{e['ts']}")
-                except kg.KgError as ex:
-                    print(f"Warning: bỏ qua cạnh KG không hợp lệ ({etype} -> {tgt}): {ex}", file=sys.stderr)
-    except Exception as ex:
+
+def _record_sync_pending(run_dir, entry_id, error):
+    def fn(data):
+        data = data if isinstance(data, dict) else {}
+        data[str(entry_id)] = {"error": str(error), "ts": _now()}
+        return data
+    statefile.update_json(_sync_pending_path(run_dir), fn, default={})
+
+
+def sync_to_kg(run_dir, e, kg_edges_arg=None):
+    """Sync one entry to the KG; return True/False and record a pending sync on failure.
+
+    Never swallows the exception silently: the failure is surfaced on stderr AND persisted so
+    `notebook.py reconcile` can retry it without re-running the experiment."""
+    try:
+        _sync_entry(run_dir, e, kg_edges_arg)
+        return True
+    except Exception as ex:  # noqa: BLE001  (record pending, do not lose the journal entry)
         print(f"Warning: KG sync skipped ({ex})", file=sys.stderr)
+        _record_sync_pending(run_dir, e.get("id"), ex)
+        return False
 
 
 def cmd_log(a):
@@ -164,45 +293,77 @@ def cmd_log(a):
         metrics = json.loads(a.metrics) if a.metrics else {}
     except ValueError:
         sys.exit("--metrics must be a JSON object")
-    existing = read_entries(a.run_dir)
     e = {"ts": dt.datetime.now().strftime("%Y-%m-%d %H:%M"), "type": a.type, "title": a.title, "body": a.body,
          "author": a.author or os.environ.get("USER") or "agent", "tags": [t for t in (a.tags or "").split(",") if t],
          "metrics": metrics, "refs": [r for r in (a.refs or "").split(",") if r]}
-    # Stable source key stored with the entry: survives duplicate titles and re-sync.
-    e["id"] = kg.source_entry_id(a.run_dir, len(existing), e)
-    with open(os.path.join(nb_dir(a.run_dir), "journal.jsonl"), "a", encoding="utf-8") as f:
-        f.write(json.dumps(e, ensure_ascii=False) + "\n")
+    # Allocate the ordinal and append under the journal lock: two workers cannot share an ordinal
+    # and no entry is lost. The UUID in the id makes identical entries distinct.
+    with statefile.file_lock(_journal_guard(a.run_dir)):
+        existing = _read_raw_entries(a.run_dir)
+        e["id"] = new_entry_id(a.run_dir, len(existing), e)
+        statefile.append_jsonl(journal_path(a.run_dir), e)
     rebuild(a.run_dir)
     if not getattr(a, "no_kg", False):
         sync_to_kg(a.run_dir, e, getattr(a, "kg_edges", None))
     print(f"logged [{a.type}] {a.title}")
 
 
+def cmd_reconcile(a):
+    pending = statefile.read_json(_sync_pending_path(a.run_dir), {})
+    pending = pending if isinstance(pending, dict) else {}
+    if not pending:
+        print("no pending KG sync")
+        return 0
+    entries = {e.get("id"): e for e in ensure_journal_ids(a.run_dir)}
+    failed = {}
+    for eid, rec in pending.items():
+        e = entries.get(eid)
+        if e is None:
+            failed[eid] = {"error": "mục journal không còn tồn tại", "ts": _now()}
+            print(f"  still pending: {eid} (entry missing)", file=sys.stderr)
+            continue
+        try:
+            _sync_entry(a.run_dir, e, None)
+        except Exception as ex:  # noqa: BLE001
+            failed[eid] = {"error": str(ex), "ts": _now()}
+            print(f"  still pending: {eid} ({ex})", file=sys.stderr)
+        else:
+            print(f"  reconciled: {eid}")
+    statefile.update_json(_sync_pending_path(a.run_dir), lambda data: failed, default={})
+    print(f"reconcile: {len(pending) - len(failed)} ok, {len(failed)} còn pending")
+    return 1 if failed else 0
+
+
 def cmd_export(a):
-    es = read_entries(a.run_dir)
+    es = read_entries(a.run_dir, migrate=True)
     d = nb_dir(a.run_dir)
     rebuild(a.run_dir)
+    meta = {}
     try:
-        meta = json.load(open(os.path.join(d, "notebooklm.json"), encoding="utf-8"))
+        with open(os.path.join(d, "notebooklm.json"), encoding="utf-8-sig") as f:
+            meta = json.load(f)
     except (OSError, ValueError):  # run cũ thiếu metadata vẫn export được
         meta = {"title": os.path.basename(os.path.abspath(a.run_dir))}
     stamp = dt.datetime.now().strftime("%Y%m%d-%H%M")
     os.makedirs(os.path.join(d, "export"), exist_ok=True)
     out = os.path.join(d, "export", f"notebook-{stamp}.md")
     counts = {t: sum(1 for e in es if e["type"] == t) for t in TYPES}
-    with open(out, "w", encoding="utf-8") as f:
-        f.write(f"# {meta['title']} — sổ thí nghiệm (xuất {stamp})\n\n"
-                f"Tổng: {len(es)} mục ({', '.join(f'{k}={v}' for k, v in counts.items() if v)}).\n\n"
-                "Không chứa dữ liệu khách hàng/bí mật; chỉ kết luận, số đo và đường dẫn.\n\n"
-                + open(os.path.join(d, "insights.md"), encoding="utf-8").read().replace("# ", "## ", 1) + "\n"
-                + open(os.path.join(d, "journal.md"), encoding="utf-8").read().replace("# ", "## ", 1))
-    meta["last_export"] = out
-    json.dump(meta, open(os.path.join(d, "notebooklm.json"), "w", encoding="utf-8"), ensure_ascii=False, indent=2)
+    text = (f"# {meta.get('title', '')} — sổ thí nghiệm (xuất {stamp})\n\n"
+            f"Tổng: {len(es)} mục ({', '.join(f'{k}={v}' for k, v in counts.items() if v)}).\n\n"
+            "Không chứa dữ liệu khách hàng/bí mật; chỉ kết luận, số đo và đường dẫn.\n\n"
+            + _read_text(os.path.join(d, "insights.md")).replace("# ", "## ", 1) + "\n"
+            + _read_text(os.path.join(d, "journal.md")).replace("# ", "## ", 1))
+    _atomic_write_text(out, text)
+    def set_last(data):
+        data = data if isinstance(data, dict) else {}
+        data["last_export"] = out
+        return data
+    statefile.update_json(os.path.join(d, "notebooklm.json"), set_last, default={})
     print("exported:", out, "\n→ upload/replace this file as a source in the problem's NotebookLM notebook (human step).")
 
 
 def cmd_show(a):
-    es = [e for e in read_entries(a.run_dir) if not a.type or e["type"] == a.type]
+    es = [e for e in ensure_journal_ids(a.run_dir) if not a.type or e["type"] == a.type]
     for e in es[-a.last:]:
         print(fmt_entry(e))
 
@@ -210,7 +371,7 @@ def cmd_show(a):
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sp = ap.add_subparsers(dest="cmd", required=True)
-    for n in ("init", "log", "export", "show"):
+    for n in ("init", "log", "export", "show", "reconcile"):
         p = sp.add_parser(n)
         p.add_argument("run_dir")
         if n == "init":
@@ -229,7 +390,10 @@ def main():
             p.add_argument("--type", choices=TYPES)
             p.add_argument("--last", type=int, default=20)
     a = ap.parse_args()
-    {"init": cmd_init, "log": cmd_log, "export": cmd_export, "show": cmd_show}[a.cmd](a)
+    cmds = {"init": cmd_init, "log": cmd_log, "export": cmd_export, "show": cmd_show, "reconcile": cmd_reconcile}
+    if a.cmd == "reconcile":
+        sys.exit(cmd_reconcile(a))
+    cmds[a.cmd](a)
 
 
 if __name__ == "__main__":

@@ -24,6 +24,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import kg  # noqa: E402  (shared stable source-key helper)
@@ -58,6 +59,24 @@ def wikilink(ref, known):
     return f"[[{base}]]" if base in known else f"`{ref}`"
 
 
+def _write(path, text):
+    """Atomic text write (temp + os.replace) so two renderers sharing an output never write half a file."""
+    os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+    fd, tmp = tempfile.mkstemp(prefix="." + os.path.basename(path) + ".", suffix=".tmp", dir=os.path.dirname(os.path.abspath(path)))
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as f:
+            f.write(text)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
 def build_run(run_dir, out_docs, known):
     run_dir = os.path.abspath(run_dir)
     rid = os.path.basename(run_dir)
@@ -72,40 +91,43 @@ def build_run(run_dir, out_docs, known):
     jl = os.path.join(run_dir, "notebook", "journal.jsonl")
     entries = []
     if os.path.exists(jl):
-        for i, line in enumerate(open(jl, encoding="utf-8")):
-            line = line.strip()
-            if not line:
-                continue
-            e = json.loads(line)
-            # Stable per-entry key; old entries without `id` get the same deterministic fallback.
-            e["_id"] = e.get("id") or kg.source_entry_id(run_dir, len(entries), e)
-            name = f"{len(entries) + 1:03d}-{slug(e['title'])}"
-            e["_name"], e["_link"] = name, f"{rel_run}/notebook/entries/{name}"
-            entries.append(e)
-            known.add(e["_link"])
+        with open(jl, encoding="utf-8") as jf:
+            for i, line in enumerate(jf):
+                line = line.strip()
+                if not line:
+                    continue
+                e = json.loads(line)
+                # Stable per-entry key; old entries without `id` get the same deterministic fallback.
+                e["_id"] = e.get("id") or kg.source_entry_id(run_dir, len(entries), e)
+                name = f"{len(entries) + 1:03d}-{slug(e['title'])}"
+                e["_name"], e["_link"] = name, f"{rel_run}/notebook/entries/{name}"
+                entries.append(e)
+                known.add(e["_link"])
     # 2. Knowledge Graph (entities.jsonl and edges.jsonl)
     kg_ent_path = os.path.join(run_dir, "knowledge", "entities.jsonl")
     kg_edge_path = os.path.join(run_dir, "knowledge", "edges.jsonl")
     kg_entities = {}
     kg_edges = []
     if os.path.exists(kg_ent_path):
-        for line in open(kg_ent_path, encoding="utf-8"):
-            line = line.strip()
-            if line:
-                try:
-                    obj = json.loads(line)
-                    if obj.get("id"):
-                        kg_entities[obj["id"]] = obj
-                except ValueError:
-                    pass
+        with open(kg_ent_path, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    try:
+                        obj = json.loads(line)
+                        if obj.get("id"):
+                            kg_entities[obj["id"]] = obj
+                    except ValueError:
+                        pass
     if os.path.exists(kg_edge_path):
-        for line in open(kg_edge_path, encoding="utf-8"):
-            line = line.strip()
-            if line:
-                try:
-                    kg_edges.append(json.loads(line))
-                except ValueError:
-                    pass
+        with open(kg_edge_path, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    try:
+                        kg_edges.append(json.loads(line))
+                    except ValueError:
+                        pass
 
     # Map entity id to vault note link
     ent_links = {}
@@ -165,7 +187,7 @@ def build_run(run_dir, out_docs, known):
                 fm.append(f"- **{ed['type']}** 🠔 [[{slink}|{src_ent.get('title')}]] ({ed['source']}){time_info}")
             fm.append("")
 
-        open(os.path.join(ent_dir, f"{eslug}.md"), "w", encoding="utf-8").write("\n".join(fm))
+        _write(os.path.join(ent_dir, f"{eslug}.md"), "\n".join(fm))
 
     # Render entries with typed edges if matched
     ed = os.path.join(out_docs, rel_run, "notebook", "entries")
@@ -207,7 +229,7 @@ def build_run(run_dir, out_docs, known):
             nav.append(f"[[{entries[i + 1]['_link']}]] →")
         if nav:
             fm += ["", " · ".join(nav), ""]
-        open(os.path.join(ed, e["_name"] + ".md"), "w", encoding="utf-8").write("\n".join(fm))
+        _write(os.path.join(ed, e["_name"] + ".md"), "\n".join(fm))
 
     # Render dedicated Knowledge Graph summary page
     if kg_entities:
@@ -248,7 +270,7 @@ def build_run(run_dir, out_docs, known):
                     kg_md.append(f"- [[{slink}|{sent.get('title')}]] ➔ **{et}** ➔ [[{tlink}|{tent.get('title')}]]{time_str}")
                 kg_md.append("")
 
-        open(os.path.join(out_docs, rel_run, "knowledge", "KNOWLEDGE_GRAPH.md"), "w", encoding="utf-8").write("\n".join(kg_md))
+        _write(os.path.join(out_docs, rel_run, "knowledge", "KNOWLEDGE_GRAPH.md"), "\n".join(kg_md))
 
     groups = {}
     for e in entries:
@@ -272,7 +294,7 @@ def build_run(run_dir, out_docs, known):
         moc += ["## Báo cáo", *[f"- [[{c}]]" for c in rep], ""]
     if art:
         moc += ["## Tài liệu / artifact", *[f"- [[{c}]]" for c in art], ""]
-    open(os.path.join(out_docs, rel_run, "INDEX.md"), "w", encoding="utf-8").write("\n".join(moc))
+    _write(os.path.join(out_docs, rel_run, "INDEX.md"), "\n".join(moc))
     return rid, len(entries), len(copied)
 
 
@@ -289,7 +311,7 @@ def main():
             sys.exit(f"refusing to overwrite {out}: no .vault-generated marker (not made by this script)")
         shutil.rmtree(out)
     os.makedirs(out)
-    open(marker, "w").write("generated by scripts/obsidian_vault.py; safe to delete\n")
+    _write(marker, "generated by scripts/obsidian_vault.py; safe to delete\n")
     docs = os.path.join(out, "docs")
     known = set()
     for f in TOP_DOCS:
@@ -320,7 +342,7 @@ def main():
             idx += ["", "## Code graph (Graphify)", "- Thư mục `code/` (xuất bằng `graphify export obsidian`, chỉ AST local)."]
         else:
             print("no graphify-out/graph.json: skipping code/ (run the ai-pipeline-graph steps first)")
-    open(os.path.join(out, "INDEX.md"), "w", encoding="utf-8").write("\n".join(idx) + "\n")
+    _write(os.path.join(out, "INDEX.md"), "\n".join(idx) + "\n")
     print(f"vault: {out}  ({len(known)} doc notes; runs: {', '.join(r for r, _, _ in summary) or '-'})")
 
 

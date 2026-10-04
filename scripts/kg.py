@@ -36,7 +36,12 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import sys
+import tempfile
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import statefile  # noqa: E402  (transactional JSON/JSONL primitives shared by every writer)
 
 if sys.stdout.encoding != "utf-8":
     sys.stdout.reconfigure(encoding="utf-8")
@@ -225,15 +230,30 @@ VERSION_RE = re.compile(r"(?:^|[-_/])(v?\d+(?:\.\d+)+)(?:$|[-_/])")
 
 
 def normalize_ref_path(ref, root=None):
-    """Return a forward-slash path relative to the project root when possible."""
+    """Return a normalized forward-slash path relative to the project root.
+
+    - `runs/x/../y/a.json` and `runs/y/a.json` become the same path.
+    - Windows (`\\`) and POSIX (`/`) separators are both accepted.
+    - A reference outside the project root returns `None` so callers reject/mark it
+      instead of inventing a `../../..` id.
+    """
     ref = str(ref).strip().replace("\\", "/")
     root = os.path.abspath(root or PROJECT_ROOT)
-    if os.path.isabs(ref) or re.match(r"^[A-Za-z]:/", ref):
+    if os.path.isabs(ref) or re.match(r"^[A-Za-z]:/", ref) or ref.startswith("/"):
         try:
-            ref = os.path.relpath(ref, root).replace("\\", "/")
+            rel = os.path.relpath(ref, root)
         except ValueError:
-            pass
-    return ref
+            return None
+    else:
+        rel = ref
+    norm = os.path.normpath(rel).replace("\\", "/")
+    if not norm or norm == ".":
+        return None
+    if os.path.isabs(norm) or re.match(r"^[A-Za-z]:/", norm) or norm.startswith("/"):
+        return None
+    if norm == ".." or norm.startswith("../"):
+        return None
+    return norm
 
 
 def extract_version(ref):
@@ -243,7 +263,9 @@ def extract_version(ref):
 
 
 def artifact_ref_id(ref, root=None):
-    return f"artifact:{normalize_ref_path(ref, root)}"
+    """Artifact entity id for a ref, or None when the ref is outside the project root."""
+    rel = normalize_ref_path(ref, root)
+    return None if rel is None else f"artifact:{rel}"
 
 
 def ensure_kg(run_dir):
@@ -251,36 +273,51 @@ def ensure_kg(run_dir):
     os.makedirs(d, exist_ok=True)
     for p in (entities_path(run_dir), edges_path(run_dir)):
         if not os.path.exists(p):
-            open(p, "w", encoding="utf-8").close()
+            # O_EXCL-style create: an empty file appears complete, never half-written.
+            try:
+                fd = os.open(p, os.O_CREAT | os.O_WRONLY | os.O_EXCL, 0o644)
+            except FileExistsError:
+                pass
+            else:
+                os.close(fd)
     return d
 
 
-def _append_jsonl(path, obj):
-    with open(path, "a", encoding="utf-8") as f:
-        f.write(json.dumps(obj, ensure_ascii=False) + "\n")
+def graph_lock_path(run_dir):
+    """Lock file guarding a whole graph (check-then-append must not interleave)."""
+    return os.path.join(kg_dir(run_dir), "graph")
+
+
+def _graph_lock(run_dir, timeout=None):
+    return statefile.file_lock(graph_lock_path(run_dir), timeout=timeout or statefile.DEFAULT_TIMEOUT)
+
+
+def edge_endpoint_issues(entities, source, target, edge_type):
+    """Return (missing, wrong_type) problem lists for an edge.
+
+    `missing` = endpoint entity not present (safe to relax for ordered backfills).
+    `wrong_type` = endpoint exists but its node type is not allowed (never relaxed).
+    """
+    allowed = EDGE_ENDPOINT_CONSTRAINTS[edge_type]
+    missing, wrong_type = [], []
+    for role, node in (("source", source), ("target", target)):
+        if node not in entities:
+            missing.append(f"{role} '{node}' not found in entities.jsonl")
+        elif entities[node].get("type") not in allowed[role + "s"]:
+            wrong_type.append(
+                f"{role} '{node}' has type '{entities[node].get('type')}', "
+                f"but {edge_type} allows {role}s: {sorted(allowed[role + 's'])}")
+    return missing, wrong_type
 
 
 def check_edge_endpoints(entities, source, target, edge_type):
-    """Validate node existence and endpoint types. Returns problem strings.
+    """Flat list of endpoint problems (used by validation/report).
 
     Each existing endpoint is checked independently, so a wrong endpoint TYPE is
     reported even when the other endpoint entity is missing (old-writer cleanup).
     """
-    problems = []
-    allowed = EDGE_ENDPOINT_CONSTRAINTS[edge_type]
-    if source not in entities:
-        problems.append(f"source '{source}' not found in entities.jsonl")
-    elif entities[source].get("type") not in allowed["sources"]:
-        problems.append(
-            f"source '{source}' has type '{entities[source].get('type')}', "
-            f"but {edge_type} allows sources: {sorted(allowed['sources'])}")
-    if target not in entities:
-        problems.append(f"target '{target}' not found in entities.jsonl")
-    elif entities[target].get("type") not in allowed["targets"]:
-        problems.append(
-            f"target '{target}' has type '{entities[target].get('type')}', "
-            f"but {edge_type} allows targets: {sorted(allowed['targets'])}")
-    return problems
+    missing, wrong_type = edge_endpoint_issues(entities, source, target, edge_type)
+    return missing + wrong_type
 
 
 def upsert_entity(run_dir, entity_id, node_type, title, body="", properties=None, created_at=None):
@@ -299,18 +336,23 @@ def upsert_entity(run_dir, entity_id, node_type, title, body="", properties=None
         "properties": properties or {},
         "created_at": created_at or dt.datetime.now().strftime("%Y-%m-%d %H:%M"),
     }
-    old = read_entities(run_dir).get(entity_id)
-    if old and all(old.get(k) == record.get(k) for k in ("id", "type", "title", "body", "properties")):
-        return old
-    ensure_kg(run_dir)
-    _append_jsonl(entities_path(run_dir), record)
+    with _graph_lock(run_dir):
+        old = read_entities(run_dir).get(entity_id)
+        if old and all(old.get(k) == record.get(k) for k in ("id", "type", "title", "body", "properties")):
+            return old
+        ensure_kg(run_dir)
+        statefile.append_jsonl(entities_path(run_dir), record)
     return record
 
 
 def upsert_artifact_ref(run_dir, ref, created_at=None, kind=None, title=None):
-    """Create/refresh the Artifact entity for a reference path (notebook/settle_task)."""
+    """Create/refresh the Artifact entity for a reference path (notebook/settle_task).
+
+    A ref outside the project root is rejected (KgError) instead of becoming `../../..`."""
     rel = normalize_ref_path(ref)
-    aid = f"artifact:{rel}"
+    if rel is None:
+        raise KgError(f"artifact ref nằm ngoài gốc dự án, bị từ chối: {ref!r}")
+    aid = artifact_ref_id(rel)
     props = {"path": rel}
     version = extract_version(rel)
     if version:
@@ -327,13 +369,12 @@ def add_edge_checked(run_dir, source, target, edge_type, valid_from=None, valid_
                      allow_dangling=False):
     """Single write API for edges: validate enum/endpoints/temporal/confidence then append.
 
-    Idempotent on (source, target, type). Raises KgError on any violation."""
+    Idempotent on (source, target, type). Raises KgError on any violation.
+    `allow_dangling=True` ONLY relaxes a MISSING endpoint (ordered backfill of an old
+    graph); an endpoint that already exists with the wrong node type is always
+    rejected, so it can never smuggle a wrong-type edge into the graph."""
     if edge_type not in EDGE_TYPES:
         raise KgError(f"invalid edge type '{edge_type}'. Allowed: {', '.join(EDGE_TYPES)}")
-    problems = check_edge_endpoints(read_entities(run_dir), source, target, edge_type)
-    if problems and not allow_dangling:
-        raise KgError("edge rejected: " + "; ".join(problems)
-                      + " (add the entity first; --allow-dangling only for backfills)")
     edge = {
         "source": source,
         "target": target,
@@ -350,13 +391,20 @@ def add_edge_checked(run_dir, source, target, edge_type, valid_from=None, valid_
         raise KgError(f"edge rejected: valid_from ('{vf}') is after valid_to ('{vt}')")
     if not (0.0 <= edge["confidence"] <= 1.0):
         raise KgError(f"edge rejected: confidence '{edge['confidence']}' not in [0.0, 1.0]")
-    if problems:
-        print("Warning (allowed by allow_dangling): " + "; ".join(problems), file=sys.stderr)
-    for existing in read_edges(run_dir):
-        if (existing.get("source"), existing.get("target"), existing.get("type")) == (source, target, edge_type):
-            return existing
-    ensure_kg(run_dir)
-    _append_jsonl(edges_path(run_dir), edge)
+    with _graph_lock(run_dir):
+        missing, wrong_type = edge_endpoint_issues(read_entities(run_dir), source, target, edge_type)
+        if wrong_type:
+            raise KgError("edge rejected: " + "; ".join(wrong_type))
+        if missing and not allow_dangling:
+            raise KgError("edge rejected: " + "; ".join(missing)
+                          + " (add the entity first; allow_dangling only for backfills)")
+        for existing in read_edges(run_dir):
+            if (existing.get("source"), existing.get("target"), existing.get("type")) == (source, target, edge_type):
+                return existing
+        ensure_kg(run_dir)
+        statefile.append_jsonl(edges_path(run_dir), edge)
+    if missing:
+        print("Warning (allowed by allow_dangling): " + "; ".join(missing), file=sys.stderr)
     return edge
 
 
@@ -1137,17 +1185,25 @@ def cmd_backfill(a):
         "confidence": 1.0,
     })
 
-    # Write entities and edges through the single validated API (overwrite target).
+    # Write through the single validated API into a scratch graph, then swap each file
+    # atomically into place (a reader never sees a half-written backfill).
     ensure_kg(target_dir)
-    open(entities_path(target_dir), "w", encoding="utf-8").close()
-    open(edges_path(target_dir), "w", encoding="utf-8").close()
-    for ent in entities:
-        upsert_entity(target_dir, ent["id"], ent["type"], ent["title"], ent.get("body", ""),
-                      ent.get("properties"), ent.get("created_at"))
-    for ed in edges:
-        add_edge_checked(target_dir, ed["source"], ed["target"], ed["type"], ed.get("valid_from"),
-                         ed.get("valid_to"), ed.get("recorded_at"), ed.get("source_ref"),
-                         ed.get("confidence", 1.0), ed.get("properties"))
+    scratch = tempfile.mkdtemp(prefix=".backfill-", dir=os.path.dirname(kd))
+    try:
+        for ent in entities:
+            upsert_entity(scratch, ent["id"], ent["type"], ent["title"], ent.get("body", ""),
+                          ent.get("properties"), ent.get("created_at"))
+        for ed in edges:
+            add_edge_checked(scratch, ed["source"], ed["target"], ed["type"], ed.get("valid_from"),
+                             ed.get("valid_to"), ed.get("recorded_at"), ed.get("source_ref"),
+                             ed.get("confidence", 1.0), ed.get("properties"))
+        for name in ("entities.jsonl", "edges.jsonl"):
+            src = os.path.join(kg_dir(scratch), name)
+            if not os.path.exists(src):
+                open(src, "w", encoding="utf-8").close()
+            statefile._replace_atomic(src, os.path.join(kd, name))
+    finally:
+        shutil.rmtree(scratch, ignore_errors=True)
 
     print(f"Backfilled Knowledge Graph for '{run_name}' into: {kd}")
     print(f"  - Entities: {len(entities)}")
