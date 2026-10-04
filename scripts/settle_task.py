@@ -3,13 +3,17 @@
 
 Usage: settle_task.py <run_dir> <orca_task_id>     (task id = payload.taskId of the worker_done message)
 Maps the Orca task id back to the plan id through task_map.json and appends it to done.json.
-Syncs task completion and dependency edges (task depends_on task) into knowledge graph.
+Syncs task completion and dependency edges (task depends_on task) into the knowledge graph.
+All KG writes go through the validated API of scripts/kg.py (no direct JSONL append).
 Do NOT call it for failed outcomes or artifacts that miss the acceptance line.
 """
 import datetime as dt
 import json
 import os
 import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import kg  # noqa: E402  (validated single write API for the knowledge graph)
 
 if len(sys.argv) < 3:
     sys.exit("Usage: settle_task.py <run_dir> <orca_task_id>")
@@ -33,108 +37,57 @@ json.dump(done, open(p, "w", encoding="utf-8"), indent=2)
 print("done:", plan_id, done)
 
 
-# Sync Task entity and depends_on edges to Knowledge Graph
 def sync_kg_task(run_dir, plan_id):
+    """Write Task entity + depends_on/uses edges through kg.py's validated API."""
     try:
         plan_path = os.path.join(run_dir, "plan.json")
         if not os.path.exists(plan_path):
             return
         plan = json.load(open(plan_path, encoding="utf-8"))
-        task_info = None
-        for t in plan.get("tasks", []):
-            if t.get("id") == plan_id:
-                task_info = t
-                break
+        tasks_by_id = {t.get("id"): t for t in plan.get("tasks", [])}
+        task_info = tasks_by_id.get(plan_id)
         if not task_info:
             return
 
-        kd = os.path.join(os.path.abspath(run_dir), "knowledge")
-        os.makedirs(kd, exist_ok=True)
-        ep = os.path.join(kd, "entities.jsonl")
-        edp = os.path.join(kd, "edges.jsonl")
-
         now_str = dt.datetime.now().strftime("%Y-%m-%d %H:%M")
         task_node_id = f"task:{plan_id}"
+        outputs = [o for o in (task_info.get("outputs") or []) if o and o != "none"]
+        known = kg.read_entities(run_dir)
 
-        # 1. Task entity
-        task_ent = {
-            "id": task_node_id,
-            "type": "Task",
-            "title": task_info.get("title", plan_id),
-            "body": task_info.get("change", ""),
-            "properties": {
+        # 1. Task entity. Outputs are recorded in properties: none of the 8 edge types expresses
+        #    "task produces artifact", so we deliberately emit NO output edge (see FB README).
+        kg.upsert_entity(
+            run_dir, task_node_id, "Task", task_info.get("title", plan_id),
+            body=task_info.get("change", ""),
+            properties={
                 "role": task_info.get("role"),
                 "phase": task_info.get("phase"),
                 "kind": task_info.get("kind", "worker"),
                 "status": "done",
+                "outputs": outputs,
             },
-            "created_at": now_str,
-        }
-        with open(ep, "a", encoding="utf-8") as f:
-            f.write(json.dumps(task_ent, ensure_ascii=False) + "\n")
+            created_at=now_str,
+        )
 
-        # 2. Edges: task depends_on task (strictly depends_on, NOT causal)
-        new_edges = []
-        for dep in task_info.get("deps", []):
+        # 2. depends_on: ensure dependency Task entities exist (from plan), then link.
+        for dep in task_info.get("deps") or []:
             dep_node_id = f"task:{dep}"
-            new_edges.append({
-                "source": task_node_id,
-                "target": dep_node_id,
-                "type": "depends_on",
-                "valid_from": now_str,
-                "valid_to": None,
-                "recorded_at": now_str,
-                "source_ref": f"plan.json:{plan_id}",
-                "confidence": 1.0,
-            })
+            dep_info = tasks_by_id.get(dep)
+            if dep_info and dep_node_id not in known:
+                kg.upsert_entity(run_dir, dep_node_id, "Task", dep_info.get("title", dep),
+                                 properties={"kind": dep_info.get("kind", "worker")},
+                                 created_at=now_str)
+            kg.add_edge_checked(run_dir, task_node_id, dep_node_id, "depends_on",
+                                valid_from=now_str, recorded_at=now_str,
+                                source_ref=f"plan.json:{plan_id}")
 
-        # Inputs used
-        for inp in task_info.get("inputs", []):
+        # 3. Inputs used: ensure the Artifact entity exists, then Task --uses--> Artifact.
+        for inp in task_info.get("inputs") or []:
             if inp and inp != "none":
-                new_edges.append({
-                    "source": task_node_id,
-                    "target": f"artifact:{inp}",
-                    "type": "uses",
-                    "valid_from": now_str,
-                    "valid_to": None,
-                    "recorded_at": now_str,
-                    "source_ref": f"plan.json:{plan_id}",
-                    "confidence": 1.0,
-                })
-
-        # Outputs
-        for out in task_info.get("outputs", []):
-            if out and out != "none":
-                new_edges.append({
-                    "source": f"artifact:{out}",
-                    "target": task_node_id,
-                    "type": "evidenced_by",
-                    "valid_from": now_str,
-                    "valid_to": None,
-                    "recorded_at": now_str,
-                    "source_ref": f"plan.json:{plan_id}",
-                    "confidence": 1.0,
-                })
-
-        # Deduplicate and append edges
-        seen = set()
-        if os.path.exists(edp):
-            with open(edp, encoding="utf-8") as f:
-                for line in f:
-                    line = line.strip()
-                    if line:
-                        try:
-                            obj = json.loads(line)
-                            seen.add((obj.get("source"), obj.get("target"), obj.get("type")))
-                        except ValueError:
-                            pass
-
-        with open(edp, "a", encoding="utf-8") as f:
-            for ed in new_edges:
-                key = (ed["source"], ed["target"], ed["type"])
-                if key not in seen:
-                    seen.add(key)
-                    f.write(json.dumps(ed, ensure_ascii=False) + "\n")
+                art_id = kg.upsert_artifact_ref(run_dir, inp, created_at=now_str, kind="input")
+                kg.add_edge_checked(run_dir, task_node_id, art_id, "uses",
+                                    valid_from=now_str, recorded_at=now_str,
+                                    source_ref=f"plan.json:{plan_id}")
 
     except Exception as ex:
         print(f"Warning: KG sync skipped in settle_task ({ex})", file=sys.stderr)

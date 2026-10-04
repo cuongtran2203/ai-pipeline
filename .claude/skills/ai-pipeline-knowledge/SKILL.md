@@ -69,6 +69,21 @@ Khi một quyết định thay đổi (ví dụ: đổi metric break_time từ t
 
 ## 4. Khi nào bắt buộc Ghi & Truy vấn
 
+### Một API ghi duy nhất (Single Write API)
+Mọi writer (kg.py, settle_task.py, notebook.py, các script sau này) **chỉ ghi qua API Python của `scripts/kg.py`**, không tự append `entities.jsonl`/`edges.jsonl`:
+```python
+import kg
+kg.upsert_entity(run_dir, id, type, title, body="", properties={}, created_at=None)
+kg.upsert_artifact_ref(run_dir, ref, created_at=None, kind=None)   # ref giữ đường dẫn tương đối gốc dự án
+kg.add_edge_checked(run_dir, source, target, type, valid_from=None, ..., allow_dangling=False)
+```
+API validate enum, tồn tại node, kiểu đầu–cuối, thứ tự thời gian (`valid_from <= valid_to`) và `confidence`; sai thì ném `kg.KgError` rõ ràng. Ghi lặp cùng `(source, target, type)` là idempotent.
+
+> **Lưu ý output của task:** không có loại cạnh nào trong 8 loại diễn đạt quan hệ "task sinh ra artifact". `uses` chỉ mang nghĩa task **dùng** artifact. Vì vậy `settle_task.py` **không phát cạnh output** mà ghi danh sách `outputs` vào `properties` của thực thể `Task`. Nếu cần biểu diễn quan hệ này, phải đề xuất loại cạnh mới (vd. `produced`) và được người dùng duyệt ở vòng thiết kế sau.
+
+### ID ổn định cho notebook
+`notebook.py log` gắn khóa nguồn ổn định `run#<ordinal>-<hash8>` vào trường `id` của mục journal; ID thực thể KG suy từ khóa này nên **tiêu đề trùng không đụng ID**. `refs` giữ **đường dẫn tương đối từ gốc dự án** (kèm `version` nếu nhận ra), không dùng basename. Mục journal cũ không có `id` vẫn đọc/export được (khóa nguồn được suy lại xác định).
+
 ### Khi nào Ghi (Write Rules)
 - **Tự động qua `notebook.py log`**:
   - Ghi `--type decision|gate` ➔ Tự động sinh node `Decision` và cạnh `decided_by` nối tới tác giả.
@@ -117,6 +132,9 @@ python scripts/kg.py add-edge runs/<id> --source decision:norm-break --target de
 
 # Kiểm tra tính toàn vẹn (enum, đầu/cuối, thứ tự thời gian)
 python scripts/kg.py validate runs/<id>
+
+# Báo cáo (chỉ đọc, KHÔNG tự sửa) cạnh/thực thể sai kiểu hoặc lơ lửng do writer cũ
+python scripts/kg.py report runs/<id>
 
 # Xem các nút láng giềng kề
 python scripts/kg.py neighbors runs/<id> decision:norm-break --direction both

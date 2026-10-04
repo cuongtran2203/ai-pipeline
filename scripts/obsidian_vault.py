@@ -25,6 +25,9 @@ import shutil
 import subprocess
 import sys
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import kg  # noqa: E402  (shared stable source-key helper)
+
 sys.stdout.reconfigure(encoding="utf-8")
 sys.stderr.reconfigure(encoding="utf-8")
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -74,6 +77,8 @@ def build_run(run_dir, out_docs, known):
             if not line:
                 continue
             e = json.loads(line)
+            # Stable per-entry key; old entries without `id` get the same deterministic fallback.
+            e["_id"] = e.get("id") or kg.source_entry_id(run_dir, len(entries), e)
             name = f"{len(entries) + 1:03d}-{slug(e['title'])}"
             e["_name"], e["_link"] = name, f"{rel_run}/notebook/entries/{name}"
             entries.append(e)
@@ -170,9 +175,9 @@ def build_run(run_dir, out_docs, known):
         fm = ["---", f"type: {e['type']}", f"author: {e.get('author', '-')}", f"date: \"{e['ts']}\"",
               "tags: [" + ", ".join(t.replace(" ", "-") for t in tags) + "]"]
 
-        # Check for related KG edges
-        entry_title_slug = slug(e["title"])
-        matching_eids = [eid for eid in kg_entities if entry_title_slug in eid.lower()]
+        # Check for related KG edges (match by stable source key, not title)
+        entry_key_slug = kg.slug(e["_id"])
+        matching_eids = [eid for eid in kg_entities if entry_key_slug in eid.lower()]
         related_edges = [ed for ed in kg_edges if any(ed.get("source") == m for m in matching_eids)]
 
         if related_edges:

@@ -17,6 +17,9 @@ import json
 import os
 import sys
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import kg  # noqa: E402  (validated single write API for the knowledge graph)
+
 sys.stdout.reconfigure(encoding="utf-8")
 sys.stderr.reconfigure(encoding="utf-8")
 TYPES = ("experiment", "decision", "insight", "research", "error", "gate")
@@ -84,21 +87,17 @@ def cmd_init(a):
     print("notebook ready:", d)
 
 
-import re
-
-
 def slug(s, n=48):
-    s = re.sub(r"[^\w\- ]+", "", s, flags=re.U).strip().replace(" ", "-")
-    return (s[:n] or "entry").strip("-").lower()
+    """Backward-compatible wrapper around the shared kg.slug."""
+    return kg.slug(s, n)
 
 
 def sync_to_kg(run_dir, e, kg_edges_arg=None):
-    try:
-        kd = os.path.join(os.path.abspath(run_dir), "knowledge")
-        os.makedirs(kd, exist_ok=True)
-        ep = os.path.join(kd, "entities.jsonl")
-        edp = os.path.join(kd, "edges.jsonl")
+    """Write notebook knowledge through kg.py's validated API (no direct JSONL append).
 
+    Entity id is derived from the entry's stable source key (run + journal ordinal + hash),
+    so duplicate titles never collide. Refs keep their project-root-relative path."""
+    try:
         type_map = {
             "decision": "Decision",
             "gate": "Decision",
@@ -108,138 +107,52 @@ def sync_to_kg(run_dir, e, kg_edges_arg=None):
             "error": "Incident",
         }
         kg_type = type_map.get(e["type"], "Experiment")
-        prefix_map = {
-            "Decision": "decision",
-            "Experiment": "exp",
-            "Incident": "incident",
-        }
-        prefix = prefix_map.get(kg_type, "node")
-        eid = f"{prefix}:{slug(e['title'])}"
+        prefix = {"Decision": "decision", "Experiment": "exp", "Incident": "incident"}.get(kg_type, "node")
+        src_id = e.get("id") or kg.source_entry_id(run_dir, 0, e)
+        eid = f"{prefix}:{kg.slug(src_id)}"
 
-        # 1. Append entity
-        ent_record = {
-            "id": eid,
-            "type": kg_type,
-            "title": e["title"],
-            "body": e["body"],
-            "properties": {
+        kg.upsert_entity(
+            run_dir, eid, kg_type, e["title"], body=e["body"],
+            properties={
                 "author": e.get("author"),
                 "tags": e.get("tags", []),
                 "metrics": e.get("metrics", {}),
                 "refs": e.get("refs", []),
+                "source_key": src_id,
             },
-            "created_at": e["ts"],
-        }
-        with open(ep, "a", encoding="utf-8") as f:
-            f.write(json.dumps(ent_record, ensure_ascii=False) + "\n")
+            created_at=e["ts"],
+        )
 
-        # 2. Author person entity
         author = e.get("author") or "agent"
-        author_id = f"person:{slug(author)}"
-        author_record = {
-            "id": author_id,
-            "type": "Person",
-            "title": author,
-            "body": "",
-            "properties": {"alias": author},
-            "created_at": e["ts"],
-        }
-        with open(ep, "a", encoding="utf-8") as f:
-            f.write(json.dumps(author_record, ensure_ascii=False) + "\n")
+        author_id = f"person:{kg.slug(author)}"
+        kg.upsert_entity(run_dir, author_id, "Person", author,
+                         properties={"alias": author}, created_at=e["ts"])
 
-        # 3. Automatic edges
-        edges_to_write = []
         if kg_type == "Decision":
-            edges_to_write.append({
-                "source": eid,
-                "target": author_id,
-                "type": "decided_by",
-                "valid_from": e["ts"],
-                "valid_to": None,
-                "recorded_at": e["ts"],
-                "source_ref": f"notebook:{e['ts']}",
-                "confidence": 1.0,
-            })
+            kg.add_edge_checked(run_dir, eid, author_id, "decided_by", valid_from=e["ts"],
+                                recorded_at=e["ts"], source_ref=f"notebook:{e['ts']}")
 
-        # Parse refs for artifacts / datasets / models
         for r in e.get("refs", []):
-            clean_r = r.strip()
+            clean_r = kg.normalize_ref_path(r)
             if not clean_r:
                 continue
-            r_slug = slug(os.path.basename(clean_r))
-            art_id = f"artifact:{r_slug}"
-            with open(ep, "a", encoding="utf-8") as f:
-                f.write(json.dumps({
-                    "id": art_id,
-                    "type": "Artifact",
-                    "title": os.path.basename(clean_r),
-                    "body": f"Referenced at {clean_r}",
-                    "properties": {"path": clean_r},
-                    "created_at": e["ts"],
-                }, ensure_ascii=False) + "\n")
+            art_id = kg.upsert_artifact_ref(run_dir, clean_r, created_at=e["ts"])
+            edge_type = "evaluated_on" if kg_type == "Experiment" else ("evidenced_by" if kg_type == "Decision" else None)
+            if edge_type:
+                kg.add_edge_checked(run_dir, eid, art_id, edge_type, valid_from=e["ts"],
+                                    recorded_at=e["ts"], source_ref=clean_r)
 
-            if kg_type == "Experiment":
-                edges_to_write.append({
-                    "source": eid,
-                    "target": art_id,
-                    "type": "evaluated_on",
-                    "valid_from": e["ts"],
-                    "valid_to": None,
-                    "recorded_at": e["ts"],
-                    "source_ref": clean_r,
-                    "confidence": 1.0,
-                })
-            elif kg_type == "Decision":
-                edges_to_write.append({
-                    "source": eid,
-                    "target": art_id,
-                    "type": "evidenced_by",
-                    "valid_from": e["ts"],
-                    "valid_to": None,
-                    "recorded_at": e["ts"],
-                    "source_ref": clean_r,
-                    "confidence": 1.0,
-                })
-
-        # 4. Explicit --kg-edges
         if kg_edges_arg:
             for item in kg_edges_arg.split(","):
                 item = item.strip()
                 if not item or ":" not in item:
                     continue
-                etype, tgt = item.split(":", 1)
-                etype = etype.strip()
-                tgt = tgt.strip()
-                edges_to_write.append({
-                    "source": eid,
-                    "target": tgt,
-                    "type": etype,
-                    "valid_from": e["ts"],
-                    "valid_to": None,
-                    "recorded_at": e["ts"],
-                    "source_ref": f"notebook:{e['ts']}",
-                    "confidence": 1.0,
-                })
-
-        # Deduplicate edges before writing
-        seen_edges = set()
-        if os.path.exists(edp):
-            with open(edp, encoding="utf-8") as f:
-                for line in f:
-                    line = line.strip()
-                    if line:
-                        try:
-                            re = json.loads(line)
-                            seen_edges.add((re.get("source"), re.get("target"), re.get("type")))
-                        except ValueError:
-                            pass
-
-        with open(edp, "a", encoding="utf-8") as f:
-            for ed in edges_to_write:
-                key = (ed["source"], ed["target"], ed["type"])
-                if key not in seen_edges:
-                    seen_edges.add(key)
-                    f.write(json.dumps(ed, ensure_ascii=False) + "\n")
+                etype, tgt = (x.strip() for x in item.split(":", 1))
+                try:
+                    kg.add_edge_checked(run_dir, eid, tgt, etype, valid_from=e["ts"],
+                                        recorded_at=e["ts"], source_ref=f"notebook:{e['ts']}")
+                except kg.KgError as ex:
+                    print(f"Warning: bỏ qua cạnh KG không hợp lệ ({etype} -> {tgt}): {ex}", file=sys.stderr)
     except Exception as ex:
         print(f"Warning: KG sync skipped ({ex})", file=sys.stderr)
 
@@ -251,9 +164,12 @@ def cmd_log(a):
         metrics = json.loads(a.metrics) if a.metrics else {}
     except ValueError:
         sys.exit("--metrics must be a JSON object")
+    existing = read_entries(a.run_dir)
     e = {"ts": dt.datetime.now().strftime("%Y-%m-%d %H:%M"), "type": a.type, "title": a.title, "body": a.body,
          "author": a.author or os.environ.get("USER") or "agent", "tags": [t for t in (a.tags or "").split(",") if t],
          "metrics": metrics, "refs": [r for r in (a.refs or "").split(",") if r]}
+    # Stable source key stored with the entry: survives duplicate titles and re-sync.
+    e["id"] = kg.source_entry_id(a.run_dir, len(existing), e)
     with open(os.path.join(nb_dir(a.run_dir), "journal.jsonl"), "a", encoding="utf-8") as f:
         f.write(json.dumps(e, ensure_ascii=False) + "\n")
     rebuild(a.run_dir)
@@ -266,8 +182,12 @@ def cmd_export(a):
     es = read_entries(a.run_dir)
     d = nb_dir(a.run_dir)
     rebuild(a.run_dir)
-    meta = json.load(open(os.path.join(d, "notebooklm.json"), encoding="utf-8"))
+    try:
+        meta = json.load(open(os.path.join(d, "notebooklm.json"), encoding="utf-8"))
+    except (OSError, ValueError):  # run cũ thiếu metadata vẫn export được
+        meta = {"title": os.path.basename(os.path.abspath(a.run_dir))}
     stamp = dt.datetime.now().strftime("%Y%m%d-%H%M")
+    os.makedirs(os.path.join(d, "export"), exist_ok=True)
     out = os.path.join(d, "export", f"notebook-{stamp}.md")
     counts = {t: sum(1 for e in es if e["type"] == t) for t in TYPES}
     with open(out, "w", encoding="utf-8") as f:

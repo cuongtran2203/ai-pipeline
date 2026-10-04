@@ -15,6 +15,7 @@ Commands:
   kg.py add-entity <run_dir> --id <ID> --type <TYPE> --title <TITLE> [--body <BODY>] [--props <JSON>] [--created-at <TS>]
   kg.py add-edge   <run_dir> --source <SRC> --target <DST> --type <TYPE> [--valid-from <T>] [--valid-to <T>] [--recorded-at <T>] [--source-ref <REF>] [--confidence <FLOAT>] [--props <JSON>]
   kg.py validate   <run_dir>
+  kg.py report     <run_dir>   (read-only: report wrong-type/dangling data, never modifies)
   kg.py neighbors  <run_dir> <node_id> [--direction in|out|both] [--edge-type <TYPE>] [--as-of <TS>]
   kg.py path       <run_dir> <src_id> <dst_id> [--max-hops <N>] [--edge-type <TYPE>] [--as-of <TS>]
   kg.py explain    <run_dir> <node_id> [--as-of <TS>]
@@ -22,11 +23,16 @@ Commands:
   kg.py backfill   <source_dir> [--out-dir <TARGET>]
 
 Python standard library only.
+
+Single write API for every KG writer (kg.py, settle_task.py, notebook.py, autonomy.py...):
+  kg.upsert_entity(...), kg.upsert_artifact_ref(...), kg.add_edge_checked(...)
+All of them validate enum/endpoint/node-existence/temporal/confidence and raise KgError.
 """
 
 import argparse
 import collections
 import datetime as dt
+import hashlib
 import json
 import os
 import re
@@ -192,6 +198,197 @@ def read_edges(run_dir):
     return edges
 
 
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+class KgError(ValueError):
+    """Raised when an entity or edge violates the knowledge graph contract."""
+
+
+def slug(text, n=64):
+    """URL/ID-friendly lowercase slug (stable: same input -> same output)."""
+    s = re.sub(r"[^\w\- ]+", "", str(text), flags=re.U).strip().replace(" ", "-")
+    return (s[:n] or "entry").strip("-").lower()
+
+
+def source_entry_id(run_dir, index, entry):
+    """Stable source key for a notebook journal entry (run + ordinal + short content hash).
+
+    Used by notebook.py and obsidian_vault.py so duplicate titles never collide."""
+    run_name = os.path.basename(os.path.abspath(run_dir))
+    raw = f"{entry.get('ts', '')}|{entry.get('title', '')}|{entry.get('body', '')}"
+    digest = hashlib.sha1(raw.encode("utf-8")).hexdigest()[:8]
+    return f"{run_name}#{index:04d}-{digest}"
+
+
+VERSION_RE = re.compile(r"(?:^|[-_/])(v?\d+(?:\.\d+)+)(?:$|[-_/])")
+
+
+def normalize_ref_path(ref, root=None):
+    """Return a forward-slash path relative to the project root when possible."""
+    ref = str(ref).strip().replace("\\", "/")
+    root = os.path.abspath(root or PROJECT_ROOT)
+    if os.path.isabs(ref) or re.match(r"^[A-Za-z]:/", ref):
+        try:
+            ref = os.path.relpath(ref, root).replace("\\", "/")
+        except ValueError:
+            pass
+    return ref
+
+
+def extract_version(ref):
+    """Best-effort version tag (e.g. v0.1) from an artifact reference path."""
+    m = VERSION_RE.search(str(ref))
+    return m.group(1) if m else None
+
+
+def artifact_ref_id(ref, root=None):
+    return f"artifact:{normalize_ref_path(ref, root)}"
+
+
+def ensure_kg(run_dir):
+    d = kg_dir(run_dir)
+    os.makedirs(d, exist_ok=True)
+    for p in (entities_path(run_dir), edges_path(run_dir)):
+        if not os.path.exists(p):
+            open(p, "w", encoding="utf-8").close()
+    return d
+
+
+def _append_jsonl(path, obj):
+    with open(path, "a", encoding="utf-8") as f:
+        f.write(json.dumps(obj, ensure_ascii=False) + "\n")
+
+
+def check_edge_endpoints(entities, source, target, edge_type):
+    """Validate node existence and endpoint types. Returns problem strings.
+
+    Each existing endpoint is checked independently, so a wrong endpoint TYPE is
+    reported even when the other endpoint entity is missing (old-writer cleanup).
+    """
+    problems = []
+    allowed = EDGE_ENDPOINT_CONSTRAINTS[edge_type]
+    if source not in entities:
+        problems.append(f"source '{source}' not found in entities.jsonl")
+    elif entities[source].get("type") not in allowed["sources"]:
+        problems.append(
+            f"source '{source}' has type '{entities[source].get('type')}', "
+            f"but {edge_type} allows sources: {sorted(allowed['sources'])}")
+    if target not in entities:
+        problems.append(f"target '{target}' not found in entities.jsonl")
+    elif entities[target].get("type") not in allowed["targets"]:
+        problems.append(
+            f"target '{target}' has type '{entities[target].get('type')}', "
+            f"but {edge_type} allows targets: {sorted(allowed['targets'])}")
+    return problems
+
+
+def upsert_entity(run_dir, entity_id, node_type, title, body="", properties=None, created_at=None):
+    """Single write API for entities: validate then append (idempotent). Raises KgError."""
+    if not isinstance(entity_id, str) or not entity_id.strip():
+        raise KgError("entity id must be a non-empty string")
+    if node_type not in NODE_TYPES:
+        raise KgError(f"invalid entity type '{node_type}'. Allowed: {', '.join(NODE_TYPES)}")
+    if not title or not str(title).strip():
+        raise KgError(f"entity '{entity_id}' must have a non-empty title")
+    record = {
+        "id": entity_id,
+        "type": node_type,
+        "title": title,
+        "body": body or "",
+        "properties": properties or {},
+        "created_at": created_at or dt.datetime.now().strftime("%Y-%m-%d %H:%M"),
+    }
+    old = read_entities(run_dir).get(entity_id)
+    if old and all(old.get(k) == record.get(k) for k in ("id", "type", "title", "body", "properties")):
+        return old
+    ensure_kg(run_dir)
+    _append_jsonl(entities_path(run_dir), record)
+    return record
+
+
+def upsert_artifact_ref(run_dir, ref, created_at=None, kind=None, title=None):
+    """Create/refresh the Artifact entity for a reference path (notebook/settle_task)."""
+    rel = normalize_ref_path(ref)
+    aid = f"artifact:{rel}"
+    props = {"path": rel}
+    version = extract_version(rel)
+    if version:
+        props["version"] = version
+    if kind:
+        props["kind"] = kind
+    upsert_entity(run_dir, aid, "Artifact", title or rel,
+                  body=f"Artifact tại {rel}", properties=props, created_at=created_at)
+    return aid
+
+
+def add_edge_checked(run_dir, source, target, edge_type, valid_from=None, valid_to=None,
+                     recorded_at=None, source_ref=None, confidence=1.0, properties=None,
+                     allow_dangling=False):
+    """Single write API for edges: validate enum/endpoints/temporal/confidence then append.
+
+    Idempotent on (source, target, type). Raises KgError on any violation."""
+    if edge_type not in EDGE_TYPES:
+        raise KgError(f"invalid edge type '{edge_type}'. Allowed: {', '.join(EDGE_TYPES)}")
+    problems = check_edge_endpoints(read_entities(run_dir), source, target, edge_type)
+    if problems and not allow_dangling:
+        raise KgError("edge rejected: " + "; ".join(problems)
+                      + " (add the entity first; --allow-dangling only for backfills)")
+    edge = {
+        "source": source,
+        "target": target,
+        "type": edge_type,
+        "valid_from": valid_from or None,
+        "valid_to": valid_to or None,
+        "recorded_at": recorded_at or dt.datetime.now().strftime("%Y-%m-%d %H:%M"),
+        "source_ref": source_ref or None,
+        "confidence": float(confidence) if confidence is not None else 1.0,
+        "properties": properties or {},
+    }
+    vf, vt = norm_ts(edge["valid_from"]), norm_ts(edge["valid_to"])
+    if vf and vt and vf > vt:
+        raise KgError(f"edge rejected: valid_from ('{vf}') is after valid_to ('{vt}')")
+    if not (0.0 <= edge["confidence"] <= 1.0):
+        raise KgError(f"edge rejected: confidence '{edge['confidence']}' not in [0.0, 1.0]")
+    if problems:
+        print("Warning (allowed by allow_dangling): " + "; ".join(problems), file=sys.stderr)
+    for existing in read_edges(run_dir):
+        if (existing.get("source"), existing.get("target"), existing.get("type")) == (source, target, edge_type):
+            return existing
+    ensure_kg(run_dir)
+    _append_jsonl(edges_path(run_dir), edge)
+    return edge
+
+
+def collect_validation(run_dir):
+    """Shared validation used by `validate` (exit 1 on error) and `report` (report-only)."""
+    entities = read_entities(run_dir)
+    edges = read_edges(run_dir)
+    errors, warnings = [], []
+    for eid, ent in entities.items():
+        if ent.get("type") not in NODE_TYPES:
+            errors.append(f"Entity '{eid}': invalid type '{ent.get('type')}'. Allowed: {NODE_TYPES}")
+        if not ent.get("title"):
+            warnings.append(f"Entity '{eid}': title is empty")
+    for i, edge in enumerate(edges):
+        src, dst, etype = edge.get("source"), edge.get("target"), edge.get("type")
+        if not src or not dst:
+            errors.append(f"Edge #{i}: missing source or target ({edge})")
+            continue
+        if etype not in EDGE_TYPES:
+            errors.append(f"Edge #{i}: invalid edge type '{etype}'. Allowed: {EDGE_TYPES}")
+            continue
+        for problem in check_edge_endpoints(entities, src, dst, etype):
+            errors.append(f"Edge #{i} ({etype}): {problem}")
+        vf, vt = norm_ts(edge.get("valid_from")), norm_ts(edge.get("valid_to"))
+        if vf and vt and vf > vt:
+            errors.append(f"Edge #{i}: valid_from ('{vf}') is after valid_to ('{vt}')")
+        conf = edge.get("confidence")
+        if conf is not None and not (0.0 <= float(conf) <= 1.0):
+            errors.append(f"Edge #{i}: confidence '{conf}' not in [0.0, 1.0]")
+    return entities, edges, errors, warnings
+
+
 def cmd_init(a):
     d = kg_dir(a.run_dir)
     os.makedirs(d, exist_ok=True)
@@ -207,140 +404,63 @@ def cmd_init(a):
 
 
 def cmd_add_entity(a):
-    if a.type not in NODE_TYPES:
-        sys.exit(f"Invalid entity type: {a.type}. Allowed: {', '.join(NODE_TYPES)}")
-    d = kg_dir(a.run_dir)
-    os.makedirs(d, exist_ok=True)
     props = json.loads(a.props) if a.props else {}
-    record = {
-        "id": a.id,
-        "type": a.type,
-        "title": a.title,
-        "body": a.body or "",
-        "properties": props,
-        "created_at": a.created_at or dt.datetime.now().strftime("%Y-%m-%d %H:%M"),
-    }
-    with open(entities_path(a.run_dir), "a", encoding="utf-8") as f:
-        f.write(json.dumps(record, ensure_ascii=False) + "\n")
-    print(f"Added entity [{record['type']}] {record['id']} ('{record['title']}')")
+    try:
+        record = upsert_entity(a.run_dir, a.id, a.type, a.title, a.body, props, a.created_at)
+    except KgError as ex:
+        sys.exit(str(ex))
+    print(f"Upserted entity [{record['type']}] {record['id']} ('{record['title']}')")
 
 
 def cmd_add_edge(a):
-    if a.type not in EDGE_TYPES:
-        sys.exit(f"Invalid edge type: {a.type}. Allowed: {', '.join(EDGE_TYPES)}")
-    d = kg_dir(a.run_dir)
-    os.makedirs(d, exist_ok=True)
     props = json.loads(a.props) if a.props else {}
-    rec_time = a.recorded_at or dt.datetime.now().strftime("%Y-%m-%d %H:%M")
-    edge = {
-        "source": a.source,
-        "target": a.target,
-        "type": a.type,
-        "valid_from": a.valid_from or None,
-        "valid_to": a.valid_to or None,
-        "recorded_at": rec_time,
-        "source_ref": a.source_ref or None,
-        "confidence": float(a.confidence) if a.confidence is not None else 1.0,
-        "properties": props,
-    }
-    # Validate endpoints: REJECT (an append-only graph must not be polluted); --allow-dangling only for ordered backfills
-    entities = read_entities(a.run_dir)
-    problems = []
-    for role, node in (("source", a.source), ("target", a.target)):
-        if node not in entities:
-            problems.append(f"{role} '{node}' not found in entities.jsonl")
-    if a.source in entities and a.target in entities:
-        stype, ttype = entities[a.source]["type"], entities[a.target]["type"]
-        allowed = EDGE_ENDPOINT_CONSTRAINTS[a.type]
-        if stype not in allowed["sources"] or ttype not in allowed["targets"]:
-            problems.append(f"invalid endpoint types for {a.type}: {stype} -> {ttype} "
-                            f"(allowed: {sorted(allowed['sources'])} -> {sorted(allowed['targets'])})")
-    if problems and not getattr(a, "allow_dangling", False):
-        sys.exit("edge rejected: " + "; ".join(problems) + "  (add the entity first; --allow-dangling only for backfills)")
-    for pr in problems:
-        print(f"Warning (allowed by --allow-dangling): {pr}", file=sys.stderr)
-
-    with open(edges_path(a.run_dir), "a", encoding="utf-8") as f:
-        f.write(json.dumps(edge, ensure_ascii=False) + "\n")
+    try:
+        edge = add_edge_checked(a.run_dir, a.source, a.target, a.type, a.valid_from, a.valid_to,
+                                a.recorded_at, a.source_ref, a.confidence, props,
+                                getattr(a, "allow_dangling", False))
+    except KgError as ex:
+        sys.exit(str(ex))
     print(f"Added edge: {edge['source']} --[{edge['type']}]--> {edge['target']}")
 
 
-def cmd_validate(a):
-    entities = read_entities(a.run_dir)
-    edges = read_edges(a.run_dir)
-
-    errors = []
-    warnings = []
-
-    # 1. Validate entities
-    for eid, ent in entities.items():
-        if ent.get("type") not in NODE_TYPES:
-            errors.append(f"Entity '{eid}': invalid type '{ent.get('type')}'. Allowed: {NODE_TYPES}")
-        if not ent.get("title"):
-            warnings.append(f"Entity '{eid}': title is empty")
-
-    # 2. Validate edges
-    for i, edge in enumerate(edges):
-        src = edge.get("source")
-        dst = edge.get("target")
-        etype = edge.get("type")
-
-        if not src or not dst:
-            errors.append(f"Edge #{i}: missing source or target ({edge})")
-            continue
-        if etype not in EDGE_TYPES:
-            errors.append(f"Edge #{i}: invalid edge type '{etype}'. Allowed: {EDGE_TYPES}")
-            continue
-
-        if src not in entities:
-            errors.append(f"Edge #{i}: source '{src}' does not exist in entities.jsonl")
-        if dst not in entities:
-            errors.append(f"Edge #{i}: target '{dst}' does not exist in entities.jsonl")
-
-        if src in entities and dst in entities:
-            stype = entities[src]["type"]
-            dtype = entities[dst]["type"]
-            allowed = EDGE_ENDPOINT_CONSTRAINTS[etype]
-            if stype not in allowed["sources"]:
-                errors.append(
-                    f"Edge #{i} ({etype}): source '{src}' has type '{stype}', but {etype} allows sources: {sorted(allowed['sources'])}"
-                )
-            if dtype not in allowed["targets"]:
-                errors.append(
-                    f"Edge #{i} ({etype}): target '{dst}' has type '{dtype}', but {etype} allows targets: {sorted(allowed['targets'])}"
-                )
-
-        # Temporal order
-        vf = norm_ts(edge.get("valid_from"))
-        vt = norm_ts(edge.get("valid_to"))
-        if vf and vt and vf > vt:
-            errors.append(f"Edge #{i}: valid_from ('{vf}') is after valid_to ('{vt}')")
-
-        conf = edge.get("confidence")
-        if conf is not None and not (0.0 <= float(conf) <= 1.0):
-            errors.append(f"Edge #{i}: confidence '{conf}' not in [0.0, 1.0]")
-
-    print(f"=== Knowledge Graph Validation: {a.run_dir} ===")
+def _print_kg_summary(run_dir, entities, edges, errors, warnings):
+    print(f"=== Knowledge Graph Validation: {run_dir} ===")
     print(f"Total entities: {len(entities)}")
     print(f"Total edges:    {len(edges)}")
-
     type_counts = collections.Counter(e.get("type") for e in entities.values())
     print("Entity breakdown: " + ", ".join(f"{k}={v}" for k, v in sorted(type_counts.items())))
     edge_counts = collections.Counter(e.get("type") for e in edges)
     print("Edge breakdown:   " + ", ".join(f"{k}={v}" for k, v in sorted(edge_counts.items())))
-
     if warnings:
         print(f"\nWarnings ({len(warnings)}):")
         for w in warnings:
             print(f"  [!] {w}")
+    return type_counts, edge_counts
 
+
+def cmd_validate(a):
+    entities, edges, errors, warnings = collect_validation(a.run_dir)
+    _print_kg_summary(a.run_dir, entities, edges, errors, warnings)
     if errors:
         print(f"\nERRORS ({len(errors)}):", file=sys.stderr)
         for err in errors:
             print(f"  [X] {err}", file=sys.stderr)
         sys.exit(1)
-    else:
-        print("\nResult: VALID (enum, endpoints, temporal order, confidence passed).")
+    print("\nResult: VALID (enum, endpoints, temporal order, confidence passed).")
+
+
+def cmd_report(a):
+    """Report-only (không sửa) các cạnh/thực thể sai để người dùng dọn dữ liệu writer cũ."""
+    entities, edges, errors, warnings = collect_validation(a.run_dir)
+    _print_kg_summary(a.run_dir, entities, edges, errors, warnings)
+    print(f"\nBáo cáo (chỉ đọc, không tự sửa): {len(errors)} lỗi, {len(warnings)} cảnh báo.")
+    if errors:
+        print(f"\nVấn đề cần dọn ({len(errors)}):")
+        for err in errors:
+            print(f"  [X] {err}")
+    if not errors:
+        print("Không phát hiện cạnh/thực thể sai kiểu hoặc lơ lửng.")
+    print("\nKết quả: REPORT-ONLY (không thay đổi file nào).")
 
 
 def cmd_neighbors(a):
@@ -1017,17 +1137,17 @@ def cmd_backfill(a):
         "confidence": 1.0,
     })
 
-    # Write entities and edges
-    ep = entities_path(target_dir)
-    edp = edges_path(target_dir)
-
-    with open(ep, "w", encoding="utf-8") as f:
-        for ent in entities:
-            f.write(json.dumps(ent, ensure_ascii=False) + "\n")
-
-    with open(edp, "w", encoding="utf-8") as f:
-        for ed in edges:
-            f.write(json.dumps(ed, ensure_ascii=False) + "\n")
+    # Write entities and edges through the single validated API (overwrite target).
+    ensure_kg(target_dir)
+    open(entities_path(target_dir), "w", encoding="utf-8").close()
+    open(edges_path(target_dir), "w", encoding="utf-8").close()
+    for ent in entities:
+        upsert_entity(target_dir, ent["id"], ent["type"], ent["title"], ent.get("body", ""),
+                      ent.get("properties"), ent.get("created_at"))
+    for ed in edges:
+        add_edge_checked(target_dir, ed["source"], ed["target"], ed["type"], ed.get("valid_from"),
+                         ed.get("valid_to"), ed.get("recorded_at"), ed.get("source_ref"),
+                         ed.get("confidence", 1.0), ed.get("properties"))
 
     print(f"Backfilled Knowledge Graph for '{run_name}' into: {kd}")
     print(f"  - Entities: {len(entities)}")
@@ -1071,6 +1191,10 @@ def main():
     p_val = sp.add_parser("validate", help="Validate enum, endpoint types, temporal order")
     p_val.add_argument("run_dir")
 
+    # report (read-only, never modifies files; dùng để dọn dữ liệu writer cũ)
+    p_rep = sp.add_parser("report", help="Báo cáo (không tự sửa) cạnh/thực thể sai kiểu hoặc lơ lửng")
+    p_rep.add_argument("run_dir")
+
     # neighbors
     p_nb = sp.add_parser("neighbors", help="List neighbors of a node")
     p_nb.add_argument("run_dir")
@@ -1111,6 +1235,7 @@ def main():
         "add-entity": cmd_add_entity,
         "add-edge": cmd_add_edge,
         "validate": cmd_validate,
+        "report": cmd_report,
         "neighbors": cmd_neighbors,
         "path": cmd_path,
         "explain": cmd_explain,
