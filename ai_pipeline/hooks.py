@@ -1,9 +1,12 @@
 """Quan ly hook cuong che pipeline_guard trong .claude/settings.json.
 
 Nguyen tac: MERGE, khong pha cau hinh nguoi dung.
-- Giu nguyen moi hook/khoa khac cua nguoi dung.
+- Giu nguyen moi hook/nhom/matcher khac cua nguoi dung (install LUON tao
+  nhom RIENG matcher du Read|Edit|MultiEdit|Write|NotebookEdit|Bash|Grep|Glob;
+  khong bao gio chen vao hay sua matcher cua nhom nguoi dung).
 - Nhan dien muc cua ai-pipeline bang noi dung command (chua
   "pipeline_guard.py"), khong them khoa la vao schema settings.
+- Uninstall chi go handler/nhom co marker cua ai-pipeline.
 - Idempotent: cai 2 lan khong doi file lan 2.
 - JSON hong -> bao loi, KHONG ghi de.
 
@@ -14,7 +17,10 @@ from pathlib import Path
 
 MARKER = "pipeline_guard.py"
 SETTINGS_REL = Path(".claude") / "settings.json"
-MATCHER = "Read|Edit|Write|Bash"
+# Nhom matcher RIENG cua ai-pipeline (RV5: khong bao gio dung chung hay sua
+# matcher cua nhom nguoi dung, vi Bash khong kich hoat nhom matcher Read).
+# Danh sach tool theo giao thuc hook Claude Code hien co trong task.
+MATCHER = "Read|Edit|MultiEdit|Write|NotebookEdit|Bash|Grep|Glob"
 
 
 class HooksError(RuntimeError):
@@ -75,8 +81,22 @@ def find_ours(data):
     return n
 
 
+def _group_is_ours(group):
+    """True khi nhom PreToolUse nay la nhom RIENG cua ai-pipeline
+    (chua handler co marker)."""
+    if not isinstance(group, dict):
+        return False
+    for h in group.get("hooks", []):
+        if _handler_is_ours(h):
+            return True
+    return False
+
+
 def install(project=".", dry_run=False):
-    """Merge hook vao settings hien co. Tra (changed: bool, messages: list)."""
+    """Merge hook vao settings hien co. Tra (changed: bool, messages: list).
+
+    NGUYEN TAC (RV5): luon tao NHOM RIENG matcher du cua ai-pipeline;
+    khong bao gio chen vao, sua hay de matcher cua nhom nguoi dung."""
     sp = settings_path(project)
     data = load_settings(sp)
     if find_ours(data):
@@ -86,14 +106,9 @@ def install(project=".", dry_run=False):
     groups = hooks.setdefault("PreToolUse", [])
     if not isinstance(groups, list):
         raise HooksError(f"{sp}: hooks.PreToolUse phai la list; khong sua gi ca.")
-    for g in groups:
-        if isinstance(g, dict) and isinstance(g.get("hooks"), list):
-            g["hooks"].append(dict(ours))
-            break
-    else:
-        groups.append({"matcher": MATCHER, "hooks": [dict(ours)]})
-    msgs = [f"them PreToolUse hook pipeline_guard vao {sp}",
-            "giua nguyen moi hook/khoa khac cua ban"]
+    groups.append({"matcher": MATCHER, "hooks": [dict(ours)]})
+    msgs = [f"them nhom PreToolUse RIENG (matcher {MATCHER}) vao {sp}",
+            "giua nguyen moi hook/nhom/matcher khac cua ban"]
     if not dry_run:
         _write(sp, data)
     else:
@@ -102,7 +117,10 @@ def install(project=".", dry_run=False):
 
 
 def uninstall(project=".", dry_run=False):
-    """Go sach muc cua ai-pipeline, giu lai hook nguoi dung. Tra (changed, msgs)."""
+    """Go sach muc cua ai-pipeline, giu lai hook nguoi dung. Tra (changed, msgs).
+
+    Chi go handler co marker trong nhom co marker; matcher/handler cua nguoi
+    dung giu nguyen; nhom rong sau khi go thi bo luon."""
     sp = settings_path(project)
     data = load_settings(sp)
     before = find_ours(data)
@@ -113,6 +131,9 @@ def uninstall(project=".", dry_run=False):
     for g in groups:
         if not isinstance(g, dict):
             kept_groups.append(g)
+            continue
+        if not _group_is_ours(g):
+            kept_groups.append(g)  # nhom nguoi dung: khong dung toi
             continue
         kept = [h for h in g.get("hooks", []) if not _handler_is_ours(h)]
         if kept:

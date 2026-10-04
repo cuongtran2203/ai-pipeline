@@ -12,24 +12,29 @@ https://code.claude.com/docs/en/hooks.md -- da kiem chung):
 
 6 quy tac (bat/tat trong guard_policy.json, mac dinh BAT):
   R1 label_protection : bao ve nhan test (seal) tru integrator/evaluator,
-                        gom ca tim kiem DE QUY (rg/grep -r/git grep/find...)
+                        gom ca tim kiem DE QUY (rg/grep -r/git grep/find.../
+                        findstr /s/dir /s/Select-String -Recurse)
                         phu len file nhan.
   R2 host_install     : cam cai goi tren host (cho phep trong container).
                         Chi xet tu-lenh that (bo qua chuoi trong quote cua
-                        lenh khac nhu echo/git commit/grep).
+                        lenh khac nhu echo/git commit/grep); allowed_packages
+                        so khop CHINH XAC theo argv (moi goi deu duyet).
   R3 dangerous_docker : cam docker nguy hiem.
   R4 ownership        : chi sua trong duong dan owns cua task.
   R5 bugfix_tests     : task bugfix khong duoc sua tests/ de lam xanh.
   R6 destructive      : cam lenh pha hoai (rm -rf ngoai tmp/worktree,
                         push --force/-f/refspec '+'/'--mirror', reset --hard).
 
-Role lay tu AI_PIPELINE_ROLE, hoac tu task (AI_PIPELINE_TASK hoac ten
-worktree <run>-<task>) tra trong task_context.json {"tasks": {...}} do
-`pipeline_guard.py context write <run_dir>` sinh tu plan.json; truong role
-trong JSON su kien hoac tool_input BI BO QUA (chong gia mao).
+Role CHI lay tu task trong task_context.json {"tasks": {...}} do
+`pipeline_guard.py context write <run_dir>` sinh tu plan.json; task duoc chon
+bang AI_PIPELINE_TASK hoac ten worktree <run_id>-<task_id> (chu thuong,
+so khop khong phan biet hoa thuong). Bien moi truong AI_PIPELINE_ROLE BI BO
+(RV5: tin cay yeu, tu khai); truong role trong JSON su kien hoac tool_input
+BI BO QUA (chong gia mao).
 
-Policy hong -> fail-closed cho R1/R3 (dung policy mac dinh de chan),
-fail-open cho R4/R5 (thieu ownership/task-context -> bo qua). Xem README.
+Policy hong -> fail-closed: dung policy mac dinh de chan R1/R3, DENY nhom
+ghi (Edit/Write/Bash) kem thong diep cau hinh ro rang, van cho Read thuong;
+tat R4/R5 (thieu ownership/task-context -> bo qua). Xem README.
 
 Moi quyet dinh (allow/deny + ly do + rule id) append vao guard_audit.jsonl
 qua scripts/statefile.py. Audit hong khong lam hong quyet dinh chan/cho.
@@ -64,7 +69,7 @@ try:
 except ImportError:  # chay doc lap khi thieu statefile: audit bo qua
     statefile = None
 
-GUARD_VERSION = "fh-v1"
+GUARD_VERSION = "fh2-v1"
 ALLOWED_ROLES = ("integrator", "evaluator")
 
 DEFAULT_POLICY = {
@@ -250,6 +255,16 @@ def _payload_after(flag_toks, argv):
     return None
 
 
+def _payload_installs(payload, depth):
+    """True khi payload (-c/--command//c) chua >=1 tu-lenh cai goi.
+    Payload co the ghep nhieu lenh (; && || |) nen phai tach va quet tung
+    lenh, de quy co gioi han do sau (qua _segment_installs)."""
+    if not payload:
+        return False
+    return any(_segment_installs(s, depth + 1)
+               for s in _split_commands(payload))
+
+
 def _strip_assignments(argv):
     """Bo tien to VAR=... (env) roi tra phan con lai."""
     i = 0
@@ -273,12 +288,11 @@ def _segment_installs(seg, depth=0):
     if word == "ssh" and "docker" in low_seg:
         return False  # ssh ... docker ...: cho phep
     if word in ("bash", "sh", "zsh", "dash"):
-        payload = _payload_after(("-c", "--command"), argv)
-        return bool(payload) and _segment_installs(payload, depth + 1)
+        return _payload_installs(_payload_after(("-c", "--command"), argv), depth)
     if word == "python":
         payload = _payload_after(("-c", "--command"), argv)
         if payload is not None:
-            return _segment_installs(payload, depth + 1)
+            return _payload_installs(payload, depth)
         low = [a.lower() for a in rest]
         for i, a in enumerate(low):
             if a == "-m" and i + 1 < len(low) and low[i + 1] == "pip":
@@ -289,17 +303,28 @@ def _segment_installs(seg, depth=0):
     if word == "env":
         rest2 = _strip_assignments(
             _drop_leading_flags(rest, ("-u", "--unset")))
-        return bool(rest2) and _segment_installs(" ".join(rest2), depth + 1)
+        return bool(rest2) and any(
+            _segment_installs(s, depth + 1)
+            for s in _split_commands(" ".join(rest2)))
     if word == "sudo":
         rest2 = _drop_leading_flags(
             rest, ("-u", "-g", "-h", "-p", "-r", "-t", "-U"))
-        return bool(rest2) and _segment_installs(" ".join(rest2), depth + 1)
+        return bool(rest2) and any(
+            _segment_installs(s, depth + 1)
+            for s in _split_commands(" ".join(rest2)))
     if word == "cmd":
-        payload = _payload_after(("/c", "/k"), argv)
-        return bool(payload) and _segment_installs(payload, depth + 1)
+        return _payload_installs(_payload_after(("/c", "/k"), argv), depth)
     if word in ("powershell", "pwsh"):
-        payload = _payload_after(("-command", "-c"), argv)
-        return bool(payload) and _segment_installs(payload, depth + 1)
+        return _payload_installs(_payload_after(("-command", "-c"), argv), depth)
+    if word == "uv":
+        # uv add/uv sync; hoi quy FH2: `uv pip install/sync/download x`
+        # truoc bi chan, phai chan lai (uv pip la wrapper cua pip).
+        low = [a.lower() for a in rest]
+        if "add" in low or "sync" in low:
+            return True
+        if "pip" in low and any(s in low for s in ("install", "download", "sync")):
+            return True
+        return False
     if word in INSTALL_SUBCMDS:
         subs = INSTALL_SUBCMDS[word]
         if not subs:  # easy_install: goi la cai
@@ -425,10 +450,12 @@ def load_context_doc(run_dir):
     return {}
 
 
-def resolve_task_id(cwd, tasks):
+def resolve_task_id(cwd, tasks, run_id=None):
     """Chon task: AI_PIPELINE_TASK truoc; khong co thi khop ten worktree/
-    thu muc cwd dang <run_id>-<task_id> (plan_to_orca dat ten worktree nhu
-    vay, chu thuong). Khong suy tu tham so trong event. Tra "" neu khong ra."""
+    thu muc cwd dang <run_id>-<task_id> (plan_to_orca dat ten worktree
+    `--name <run_id>-<task_id lowercase>`, vd. `rr-i1` cho run `rr` task `I1`).
+    So khop KHONG phan biet hoa thuong; ho tro run_id co dau '-'.
+    Khong suy tu tham so trong event. Tra "" neu khong ra."""
     tid = (os.environ.get("AI_PIPELINE_TASK") or "").strip()
     if tid:
         for k in tasks or {}:
@@ -444,25 +471,37 @@ def resolve_task_id(cwd, tasks):
     if wt:
         names.append(os.path.basename(os.path.abspath(wt)))
     keys = [str(k) for k in (tasks or {})]
+    run_low = str(run_id or "").strip().lower()
     for name in names:
         low = (name or "").lower()
         if not low:
             continue
         for k in keys:
-            kl = k.lower()
-            if low == kl or low.endswith("-" + kl):
+            if low == k.lower():
                 return k
+        for k in keys:
+            kl = k.lower()
+            suffix = "-" + kl
+            if not low.endswith(suffix):
+                continue
+            if run_low:
+                # worktree chuan <run_id>-<task_id>: tien to phai la run_id
+                # (khong phan biet hoa thuong); dung ca khi run_id co '-'.
+                if low == run_low + suffix or low.endswith(run_low + suffix):
+                    return k
+                continue
+            return k
     return ""
 
 
 def get_role(run_dir, cwd=None, context_doc=None):
-    role = (os.environ.get("AI_PIPELINE_ROLE") or "").strip().lower()
-    if role:
-        return role, "env:AI_PIPELINE_ROLE"
+    """Role CHI tu task_context.json (do `context write` sinh tu plan.json).
+    AI_PIPELINE_ROLE (bien moi truong tu khai) BI BO (RV5: tin cay yeu)."""
     doc = context_doc if context_doc is not None else load_context_doc(run_dir)
     tasks = doc.get("tasks") if isinstance(doc, dict) else None
     if isinstance(tasks, dict) and tasks:
-        tid = resolve_task_id(cwd or os.getcwd(), tasks)
+        tid = resolve_task_id(cwd or os.getcwd(), tasks,
+                              run_id=doc.get("run_id") if isinstance(doc, dict) else None)
         if tid:
             entry = tasks.get(tid)
             if isinstance(entry, dict):
@@ -486,7 +525,8 @@ def get_ownership(cwd, run_dir, context_doc=None):
     doc = context_doc if context_doc is not None else load_context_doc(run_dir)
     tasks = doc.get("tasks") if isinstance(doc, dict) else None
     if isinstance(tasks, dict) and tasks:
-        tid = resolve_task_id(cwd, tasks)
+        tid = resolve_task_id(cwd, tasks,
+                              run_id=doc.get("run_id") if isinstance(doc, dict) else None)
         entry = tasks.get(tid) if tid else None
         if isinstance(entry, dict):
             owns = entry.get("owns")
@@ -708,6 +748,25 @@ def _trailing_paths(args, skip_first=True):
     return paths or ["."]
 
 
+def _win_flag(tok):
+    """True khi token la flag kieu Windows (/s, /i, /c:...). Chi nhan flag
+    1 chu cai (findstr/dir) de khong nham duong dan tuyet doi POSIX (/labels)."""
+    t = tok or ""
+    if re.fullmatch(r"/[a-zA-Z](:.*)?", t):
+        return True
+    return t.lower() == "/off[line]"
+
+
+def _win_paths(args, skip_first=True):
+    """Duong dan cho findstr/dir: bo flag -... va /...; bo arg dau (pattern)."""
+    nonflags = [a for a in args
+                if a in (".", "..") or (not a.startswith("-") and not _win_flag(a))]
+    if not nonflags:
+        return ["."]
+    paths = nonflags[1:] if skip_first else nonflags
+    return paths or ["."]
+
+
 def _select_string_roots(args):
     roots = []
     i = 0
@@ -783,8 +842,14 @@ def _segment_recursive_search(seg, cwd, piped_to_reader=False):
         toks = [a.lower() for a in rest]
         if "/s" not in toks:
             return False, []
-        paths = _trailing_paths(rest)
-        return True, (paths or ["."])
+        return True, _win_paths(rest)
+    if base == "dir":
+        # `dir /s` liet ke de quy tren Windows (mac dinh thu muc hien tai).
+        # Khac findstr: dir khong co pattern dau, moi arg con lai la path.
+        toks = [a.lower() for a in rest]
+        if "/s" not in toks:
+            return False, []
+        return True, _win_paths(rest, skip_first=False)
     if base == "select-string":
         if "-recurse" not in [a.lower() for a in rest]:
             return False, []
@@ -948,20 +1013,250 @@ def _rule_label(tool, fpath, cmd, policy, ctx):
         return None
     if not hay:
         return None
-    for prot in protected:
-        token = norm(prot)
-        if not token:
-            continue
-        for h in hay:
-            if token in h:
-                return _deny("label_protection",
-                              f"duong dan nhan test duoc bao ve ({prot}); "
-                              f"chi integrator/evaluator duoc cham (role hien tai: "
-                              f"{ctx['role'] or 'khong ro'} tu {ctx['role_src'] or 'khong co'}). "
-                              f"Can ngoai le? hoi coordinator qua ask.")
     if tool == "Bash" and cmd:
+        # (Bash xu ly rieng ben duoi: mien tru glob/--exclude + de quy.)
+        pass
+    else:
+        for prot in protected:
+            token = norm(prot)
+            if not token:
+                continue
+            for h in hay:
+                if token in h:
+                    return _deny("label_protection",
+                                  f"duong dan nhan test duoc bao ve ({prot}); "
+                                  f"chi integrator/evaluator duoc cham (role hien tai: "
+                                  f"{ctx['role'] or 'khong ro'} tu {ctx['role_src'] or 'khong co'}). "
+                                  f"Can ngoai le? hoi coordinator qua ask.")
+    if tool == "Bash" and cmd:
+        # Mien tru: token nhan chi xuat hien trong glob/--exclude hop le
+        # (vd. --glob '!eval_manifest.json') thi khong deny truc tiep o day;
+        # kiem tra de quy ben duoi se cho qua neu exclude khop that.
+        segs = _split_commands(cmd)
+        for prot in protected:
+            token = norm(prot)
+            if not token:
+                continue
+            hit_segs = [s for s in segs if token in norm(s)]
+            if not hit_segs:
+                continue
+            if all(_has_valid_exclude(s, [prot]) for s in hit_segs):
+                continue
+            return _deny("label_protection",
+                          f"duong dan nhan test duoc bao ve ({prot}); "
+                          f"chi integrator/evaluator duoc cham (role hien tai: "
+                          f"{ctx['role'] or 'khong ro'} tu {ctx['role_src'] or 'khong co'}). "
+                          f"Can ngoai le? hoi coordinator qua ask.")
         return _rule_label_recursive(cmd, policy, ctx)
     return None
+
+
+# --- allowed_packages: parse ten goi theo argv (RV5: khong substring) ---
+
+def _norm_pkg(name):
+    """Chuan hoa ten goi de so khop chinh xac (PEP 503: _/-/hoa-thuong)."""
+    return re.sub(r"[-_.]+", "-", str(name or "").strip()).strip("-").lower()
+
+
+def _strip_pkg_spec(spec):
+    """Ten goi tu 1 spec argv (loai ==/>=/extras/marker). Tra None khi khong
+    phai ten goi xac dinh (URL, git+, duong dan, file, -r/-e...)."""
+    s = str(spec or "").strip().strip("\"'")
+    if not s:
+        return None
+    if "://" in s:
+        return None  # URL truc tiep
+    if s.lower().startswith(("http:", "https:", "git+", "file:", "ftp:")):
+        return None
+    if re.match(r"^[A-Za-z]:[\\/]", s) or s.startswith(("~", "/", "\\", "./", "../", ".\\")):
+        return None  # duong dan
+    if s.startswith("@"):
+        # scope npm: @scope/pkg[@version] -> @scope/pkg
+        m = re.fullmatch(r"(@[A-Za-z0-9._~-]+/[A-Za-z0-9._~-]+)(@.+)?", s)
+        return _norm_pkg(m.group(1)) if m else None
+    if "/" in s or "\\" in s:
+        return None  # duong dan / file archive
+    if s.lower().endswith((".whl", ".tar.gz", ".zip", ".tgz", ".git")):
+        return None
+    s = s.split(";")[0].strip()  # marker moi truong (PEP 508)
+    if "@" in s:
+        # PEP 508 truc tiep (pkg @ url) -> khong kiem duoc; npm foo@1.2 -> foo
+        head, _, tail = s.partition("@")
+        if not head.strip() or "://" in tail or "/" in tail:
+            return None
+        s = head.strip()
+    # pypi: cat extras [a,b] va version (==/>=/<=/!=/~=/>/</===)
+    s = re.split(r"\[", s, 1)[0]
+    s = re.split(r"===|==|>=|<=|~=|!=|>|<", s, 1)[0].strip()
+    if not re.fullmatch(r"[A-Za-z0-9]([A-Za-z0-9._-]*[A-Za-z0-9])?", s or ""):
+        return None
+    return _norm_pkg(s) or None
+
+
+# flag nhan gia tri (bo ca gia tri dung sau) khi parse goi cai dat.
+_PKG_VALUE_FLAGS = frozenset({
+    "-r", "--requirement", "-c", "--constraint", "-e", "--editable",
+    "-t", "--target", "--prefix", "--root", "--src",
+    "-i", "--index-url", "--extra-index-url", "--find-links", "-f",
+    "--trusted-host", "--config-settings", "--global-option", "--build-option",
+    "--constraint", "--config-setting", "--python-version", "--platform",
+    "--abi", "--implementation", "--only-binary", "--no-binary",
+    "-g", "--global", "--registry", "--scope", "--auth",
+})
+
+
+def _unverifiable_flag(tok):
+    """True khi flag keo theo noi dung khong kiem duoc (-r file, -e path/URL,
+    -c constraints): gap la DENY, khong allow."""
+    return tok.lower() in ("-r", "--requirement", "-c", "--constraint",
+                           "-e", "--editable")
+
+
+def _collect_pkgs(args):
+    """Lay ten goi tu argv sau subcommand install/add. Tra list (co the rong)
+    hoac None khi gap nguon khong kiem duoc (file/URL/editable)."""
+    pkgs = []
+    i = 0
+    while i < len(args):
+        a = args[i]
+        if a == "--":
+            pkgs.extend(args[i + 1:])
+            break
+        if a.startswith("-") and len(a) > 1:
+            name, eq, _val = a.partition("=")
+            if _unverifiable_flag(name):
+                return None
+            if eq or name.lower() in _PKG_VALUE_FLAGS:
+                if not eq:
+                    i += 1  # bo gia tri dung sau
+            i += 1
+            continue
+        pkgs.append(a)
+        i += 1
+    out = []
+    for p in pkgs:
+        n = _strip_pkg_spec(p)
+        if n is None:
+            return None
+        out.append(n)
+    return out
+
+
+def _install_start(argv):
+    """Vi tri bat dau danh sach goi: (installer, args-sau-subcommand).
+    Tra (None, None) khi khong nhan dang."""
+    if not argv:
+        return None, None
+    word = _canon_word(argv[0])
+    rest = argv[1:]
+    if word == "sudo":
+        rest = _drop_leading_flags(rest, ("-u", "-g", "-h", "-p", "-r", "-t", "-U"))
+        return _install_start(rest)
+    if word == "env":
+        rest = _strip_assignments(_drop_leading_flags(rest, ("-u", "--unset")))
+        return _install_start(rest)
+    if word in ("bash", "sh", "zsh", "dash", "cmd", "powershell", "pwsh"):
+        return None, None  # wrapper: goi _install_packages theo tung lenh tach
+    if word == "python":
+        low = [a.lower() for a in rest]
+        for i, a in enumerate(low):
+            if a == "-m" and i + 1 < len(low) and low[i + 1] == "pip":
+                tail = rest[i + 2:]
+                for j, t in enumerate(tail):
+                    if t.lower() in ("install", "download"):
+                        return "pip", tail[j + 1:]
+                return "pip", []
+        return None, None
+    if word == "uv" and rest[:1] and rest[0].lower() == "pip":
+        tail = rest[1:]
+        for j, t in enumerate(tail):
+            if t.lower() in ("install", "download", "sync"):
+                return "uv-pip", tail[j + 1:]
+        return "uv-pip", []
+    if word in INSTALL_SUBCMDS:
+        subs = INSTALL_SUBCMDS[word]
+        if not subs:
+            return word, list(rest)  # easy_install: toan bo la goi
+        low = [a.lower() for a in rest]
+        hit = next((s for s in subs if " " not in s and s in low), None)
+        if hit is None:
+            return None, None
+        return word, rest[low.index(hit) + 1:]
+    return None, None
+
+
+def _install_packages(seg, depth=0):
+    """Ten goi (da chuan hoa) cua 1 lenh don cai goi. Tra None khi khong phai
+    cai goi hoac khong kiem duoc (wrapper phuc tap, -r file, URL...)."""
+    if depth > 3:
+        return None
+    argv = _qtok(seg)
+    if not argv:
+        return None
+    word = _canon_word(argv[0])
+    rest = argv[1:]
+    if word in ("bash", "sh", "zsh", "dash"):
+        payload = _payload_after(("-c", "--command"), argv)
+        if not payload:
+            return None
+        all_pkgs = []
+        for s in _split_commands(payload):
+            if not _segment_installs(s, depth + 1):
+                continue
+            pkgs = _install_packages(s, depth + 1)
+            if pkgs is None:
+                return None
+            all_pkgs.extend(pkgs)
+        return all_pkgs or None
+    if word == "python":
+        payload = _payload_after(("-c", "--command"), argv)
+        if payload is not None:
+            all_pkgs = []
+            for s in _split_commands(payload):
+                if not _segment_installs(s, depth + 1):
+                    continue
+                pkgs = _install_packages(s, depth + 1)
+                if pkgs is None:
+                    return None
+                all_pkgs.extend(pkgs)
+            return all_pkgs or None
+    if word in ("cmd",):
+        payload = _payload_after(("/c", "/k"), argv)
+        if payload is None:
+            return None
+        all_pkgs = []
+        for s in _split_commands(payload):
+            if not _segment_installs(s, depth + 1):
+                continue
+            pkgs = _install_packages(s, depth + 1)
+            if pkgs is None:
+                return None
+            all_pkgs.extend(pkgs)
+        return all_pkgs or None
+    if word in ("powershell", "pwsh"):
+        payload = _payload_after(("-command", "-c"), argv)
+        if payload is None:
+            return None
+        all_pkgs = []
+        for s in _split_commands(payload):
+            if not _segment_installs(s, depth + 1):
+                continue
+            pkgs = _install_packages(s, depth + 1)
+            if pkgs is None:
+                return None
+            all_pkgs.extend(pkgs)
+        return all_pkgs or None
+    if word in ("sudo", "env"):
+        inst, args = _install_start(argv)
+        if inst is None:
+            return None
+        pkgs = _collect_pkgs(args or [])
+        return pkgs or None
+    inst, args = _install_start(argv)
+    if inst is None:
+        return None
+    pkgs = _collect_pkgs(args or [])
+    return pkgs or None
 
 
 def _rule_install(tool, cmd, policy):
@@ -969,12 +1264,22 @@ def _rule_install(tool, cmd, policy):
         return None
     if tool != "Bash" or not cmd:
         return None
-    hit = any(_segment_installs(s) for s in _split_commands(cmd))
-    if not hit:
+    install_segs = [s for s in _split_commands(cmd) if _segment_installs(s)]
+    if not install_segs:
         return None
-    allowed_pkgs = [str(p).lower() for p in (policy.get("allowed_packages") or [])]
-    if allowed_pkgs and any(p and p in cmd.lower() for p in allowed_pkgs):
-        return None
+    # allow CHI khi MOI goi cua MOI tu-lenh cai dat deu nam trong danh sach
+    # da duyet (so khop chinh xac sau chuan hoa; -r file/URL/editable -> deny).
+    allowed = {_norm_pkg(p) for p in (policy.get("allowed_packages") or [])}
+    allowed.discard("")
+    if allowed:
+        ok = True
+        for s in install_segs:
+            pkgs = _install_packages(s)
+            if not pkgs or any(p not in allowed for p in pkgs):
+                ok = False
+                break
+        if ok:
+            return None
     return _deny("host_install",
                  "cai goi tren host bi cam (pip/pipx/npm/yarn/apt/conda/brew/cargo/go/"
                  "uv/poetry/pdm, ke ca download). "
@@ -1199,11 +1504,30 @@ def _rule_destructive(tool, cmd, policy, ctx):
                     return _deny("destructive", reason)
         return None
     return None
-def evaluate(event, policy, ctx):
+# --- P3 (RV5): policy hong -> deny nhom ghi, van cho Read thuong ---
+WRITE_TOOLS_CORRUPT = ("Edit", "Write", "MultiEdit", "NotebookEdit", "Bash")
+
+
+def _rule_policy_corrupt(tool, corrupt, policy_src):
+    """Policy hong: fail-closed cho nhom ghi (Edit/Write/Bash) kem thong diep
+    cau hinh ro rang; Read thuong van cho qua. Audit van ghi (trong decide)."""
+    if not corrupt:
+        return None
+    if tool in WRITE_TOOLS_CORRUPT:
+        where = policy_src or "guard_policy.json"
+        return _deny("policy_config",
+                     f"cau hinh guard hong ({where} khong doc duoc); fail-closed: "
+                     f"tu choi {tool} de an toan. Sua/xoa file policy roi chay lai. "
+                     f"Chi Read duoc phep; can ngoai le? hoi coordinator qua ask.")
+    return None
+
+
+def evaluate(event, policy, ctx, corrupt=False, policy_src=None):
     """Danh gia 1 su kien. Tra dict {allowed, rule, reason} (pure, de test)."""
     policy = policy or dict(DEFAULT_POLICY)
     tool, fpath, cmd = event_paths(event or {})
     for res in (
+        _rule_policy_corrupt(tool, corrupt, policy_src),
         _rule_label(tool, fpath, cmd, policy, ctx),
         _rule_install(tool, cmd, policy),
         _rule_docker(tool, cmd, policy),
@@ -1232,13 +1556,16 @@ def decide(event, cwd, policy_path=None, audit_path=None, run_dir=None):
     policy_path = policy_path or find_policy(cwd)
     policy, corrupt = load_policy(policy_path)
     if corrupt:
-        # fail-closed R1/R3 (dung mac dinh de chan), fail-open R4/R5 (tat).
+        # fail-closed: dung mac dinh de chan R1/R3; tat R4/R5 (thieu
+        # ownership/task-context -> bo qua); rule policy_config (trong
+        # evaluate) deny nhom ghi, van cho Read thuong.
         policy = dict(DEFAULT_POLICY)
         policy["rules"] = dict(DEFAULT_POLICY["rules"])
         policy["rules"]["ownership"] = False
         policy["rules"]["bugfix_tests"] = False
     ctx = build_context(cwd, run_dir)
-    result = evaluate(event or {}, policy, ctx)
+    result = evaluate(event or {}, policy, ctx,
+                      corrupt=corrupt, policy_src=policy_path)
     tool, fpath, cmd = event_paths(event or {})
     audit_path = audit_path or find_audit_path(cwd, ctx["run_dir"])
     ok = audit({
