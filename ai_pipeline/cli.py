@@ -352,6 +352,11 @@ def cmd_version(a):
     return 0
 
 
+def cmd_hooks(a):
+    from . import hooks as hooks_mod
+    return hooks_mod.run([a.action, "--path", a.path] + (["--dry-run"] if a.dry_run else []))
+
+
 def build_parser():
     p = argparse.ArgumentParser(prog="ai-pipeline", description=__doc__.strip().splitlines()[0])
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -386,6 +391,11 @@ def build_parser():
     s.add_argument("name", help="alias (" + ", ".join(sorted(ALIASES)) + ") hoac ten script")
     s.add_argument("args", nargs=argparse.REMAINDER); s.add_argument("--path", default="."); s.set_defaults(fn=cmd_script)
     s = sub.add_parser("version"); s.set_defaults(fn=cmd_version)
+    s = sub.add_parser("hooks", help="cai/go hook cuong che pipeline_guard (merge, khong pha settings)")
+    s.add_argument("action", choices=["install", "status", "uninstall"])
+    s.add_argument("--path", default=".")
+    s.add_argument("--dry-run", action="store_true")
+    s.set_defaults(fn=cmd_hooks)
     return p
 
 
