@@ -13,7 +13,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from . import __version__
+from . import __version__, packs
 
 MANIFEST = ".ai-pipeline.json"
 BEGIN, END = "<!-- ai-pipeline:begin -->", "<!-- ai-pipeline:end -->"
@@ -362,6 +362,8 @@ def build_parser():
             sp.add_argument("--agent", choices=["claude", "codex", "both"], default="both")
             sp.add_argument("--force", action="store_true", help="ghi de file da ton tai")
             sp.add_argument("--dry-run", action="store_true")
+            sp.add_argument("--with", dest="with_packs", default="", help="cai them pack, vd graphify,obsidian (can --yes)")
+            sp.add_argument("--yes", "-y", action="store_true", help="dong y cai pack (khong hoi)")
             sp.add_argument("--link", action="store_true", help="them dong tro vao AGENTS.md co san (mac dinh: khong sua)")
             sp.add_argument("--gitignore", action="store_true", help="them muc vao .gitignore (mac dinh: chi goi y)")
             sp.add_argument("-v", "--verbose", action="store_true")
@@ -369,6 +371,12 @@ def build_parser():
     s = sub.add_parser("init", help="cai workflow vao du an"); common(s, True); s.set_defaults(fn=cmd_init)
     s = sub.add_parser("update", help="nang cap file framework (giu file ban da sua)"); common(s, True)
     s.set_defaults(fn=lambda a: cmd_init(a, update=True))
+    s = sub.add_parser("pack", help="cai/build pack tuy chon: graphify, obsidian")
+    s.add_argument("action", choices=["list", "status", "install", "build", "uninstall"])
+    s.add_argument("pack", nargs="?", choices=["graphify", "obsidian"])
+    s.add_argument("--path", default="."); s.add_argument("--yes", "-y", action="store_true", help="dong y cai (khong hoi)")
+    s.add_argument("--version", help="phien ban graphifyy (mac dinh: ban da kiem chung)")
+    s.add_argument("--extras", help="extras cua graphifyy, vd pdf"); s.set_defaults(fn=packs.run)
     s = sub.add_parser("uninstall", help="go cac file da cai (giu file ban sua)"); common(s)
     s.add_argument("--dry-run", action="store_true"); s.set_defaults(fn=cmd_uninstall)
     s = sub.add_parser("doctor", help="kiem tra moi truong va cai dat"); common(s); s.set_defaults(fn=cmd_doctor)

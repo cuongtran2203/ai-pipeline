@@ -1,0 +1,20 @@
+# Graphify scope: code only; never dataset/images/checkpoints/secrets/derived/mirrors
+.git/
+.venv*/
+node_modules/
+graphify-out/
+vault/
+__pycache__/
+runs/*/data/
+runs/*/notebook/export/
+.claude/skills/
+.agents/skills/
+.env*
+*.pt
+*.pth
+*.pdparams
+*.onnx
+*.npy
+*.jpg
+*.png
+*.pdf
