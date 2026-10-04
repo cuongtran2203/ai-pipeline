@@ -96,11 +96,12 @@ def policy_status(run_dir, override=None):
     """Phan biet trang thai policy cho duong start (fail-closed).
 
     Tra ve (status, policy, errors) voi status thuoc:
-      missing - khong co file (run cu) -> cho phep + canh bao + audit migration
+      missing - KHONG CO file (run cu) -> cho phep + canh bao + audit migration
       ok      - hop le -> check cap binh thuong
-      corrupt - file co nhung doc/parse loi -> DUNG start, exit != 0
+      corrupt - file TON TAI nhung rong / doc-parse loi -> DUNG start, exit != 0
       invalid - parse duoc nhung validate loi -> DUNG start, exit != 0
-    File rong duoc coi nhu missing (cung contract voi statefile._read_strict).
+    Chi file KHONG TON TAI moi la legacy-missing; file da ton tai ma rong
+    hoac sai kieu/schema la corrupt (fail-closed, KHONG ghi de, RV4 P2).
     """
     p = policy_path(run_dir, override)
     try:
@@ -111,7 +112,8 @@ def policy_status(run_dir, override=None):
     except OSError as e:
         return "corrupt", None, [f"khong doc duoc policy {p}: {e}"]
     if not text.strip():
-        return "missing", None, []
+        return "corrupt", None, [f"autonomy_policy.json ton tai nhung rong ({p}); "
+                                 "sua/xoa tay hoac khoi phuc ban sao, KHONG tu ghi de"]
     try:
         pol = json.loads(text)
     except ValueError as e:
@@ -173,10 +175,35 @@ def read_usage(run_dir, override=None):
         return {}
 
 
+def _validate_usage_records(u, path):
+    """Validate kieu ban ghi usage TRUOC khi tinh cap (RV4 P2, fail-closed).
+
+    usage phai la dict; moi khoa usage biet (tasks_started, api_cost_usd,
+    elapsed_hours, gpu_hours, tokens) neu co phai la int/float (bool bi loai).
+    Sai -> StateCorrupt (KHONG coi nhu {}, KHONG ghi de).
+    """
+    if not isinstance(u, dict):
+        raise statefile_mod.StateCorrupt(
+            f"{path} phai la object JSON, got {type(u).__name__}; khong ghi de. "
+            "Sua/xoa tay hoac khoi phuc ban sao.")
+    for k in USAGE_OF.values():
+        if k in u and u[k] is not None and not isinstance(u[k], (int, float)):
+            raise statefile_mod.StateCorrupt(
+                f"{path}['{k}'] phai la so, got {type(u[k]).__name__}; khong ghi de. "
+                "Sua/xoa tay hoac khoi phuc ban sao.")
+        if isinstance(u.get(k), bool):
+            raise statefile_mod.StateCorrupt(
+                f"{path}['{k}'] phai la so, got bool; khong ghi de. "
+                "Sua/xoa tay hoac khoi phuc ban sao.")
+    return u
+
+
 def read_usage_strict(run_dir, override=None):
     """Doc usage.json cho duong start: hong -> StateCorrupt (KHONG ghi de, dung start).
 
-    Thieu file/rong -> {} (chua start gi). JSON khong phai object -> {} (tuong thich).
+    Chi file KHONG TON TAI moi la legacy-missing (-> {} = chua start gi).
+    File TON TAI ma rong hoac khong phai object (vd. list) la corrupt
+    (fail-closed, RV4 P2). Kieu ban ghi duoc validate truoc khi tinh cap.
     """
     p = override or os.path.join(run_dir, USAGE_FILE)
     try:
@@ -185,14 +212,16 @@ def read_usage_strict(run_dir, override=None):
     except FileNotFoundError:
         return {}
     if not text.strip():
-        return {}
+        raise statefile_mod.StateCorrupt(
+            f"{p} ton tai nhung rong; khong ghi de. "
+            "Sua/xoa tay hoac khoi phuc ban sao.")
     try:
         u = json.loads(text)
     except ValueError as e:
         raise statefile_mod.StateCorrupt(
             f"{p} khong phai JSON hop le ({e}); khong ghi de. "
             "Sua/xoa tay hoac khoi phuc ban sao.") from e
-    return u if isinstance(u, dict) else {}
+    return _validate_usage_records(u, p)
 
 
 def write_usage(run_dir, usage, override=None):
@@ -231,8 +260,9 @@ def admission_path(run_dir):
 def read_started_map(run_dir):
     """started.json dang dict (moi) hoac list (cu) -> dict {task_id: receipt}.
 
-    Thieu/rong -> {}. Hong hoac khong phai dict/list -> StateCorrupt
-    (dung, KHONG ghi de).
+    Chi file KHONG TON TAI moi la legacy-missing (-> {}). File TON TAI ma
+    rong la corrupt (fail-closed, RV4 P2). Hong hoac khong phai dict/list ->
+    StateCorrupt (dung, KHONG ghi de).
     """
     p = os.path.join(run_dir, "started.json")
     try:
@@ -241,7 +271,9 @@ def read_started_map(run_dir):
     except FileNotFoundError:
         return {}
     if not text.strip():
-        return {}
+        raise statefile_mod.StateCorrupt(
+            f"{p} ton tai nhung rong; khong ghi de. "
+            "Sua/xoa tay hoac khoi phuc ban sao.")
     try:
         raw = json.loads(text)
     except ValueError as e:
@@ -256,8 +288,36 @@ def read_started_map(run_dir):
         f"{p} phai la object (moi) hoac list (cu), got {type(raw).__name__}; khong ghi de.")
 
 
+ADMISSION_STATES = ("reserved", "starting", "started", "failed")
+
+
+def validate_admission(adm, path="admission.json"):
+    """Validate kieu ban ghi admission TRUOC khi tinh cap (RV4 P2, fail-closed).
+
+    adm phai la dict; moi ban ghi phai la dict co state thuoc
+    reserved|starting|started|failed; owner/generation/dispatch neu co phai
+    la str (hoac None). Sai -> StateCorrupt (KHONG bo qua im lang).
+    """
+    if not isinstance(adm, dict):
+        raise statefile_mod.StateCorrupt(
+            f"{path} phai la object, got {type(adm).__name__}; khong ghi de.")
+    for tid, rec in adm.items():
+        if not isinstance(rec, dict):
+            raise statefile_mod.StateCorrupt(
+                f"{path}['{tid}'] phai la object, got {type(rec).__name__}; khong ghi de.")
+        if rec.get("state") not in ADMISSION_STATES:
+            raise statefile_mod.StateCorrupt(
+                f"{path}['{tid}'].state phai thuoc {ADMISSION_STATES}, "
+                f"got {rec.get('state')!r}; khong ghi de.")
+        for fk in ("owner", "generation", "dispatch", "ts"):
+            if fk in rec and rec[fk] is not None and not isinstance(rec[fk], str):
+                raise statefile_mod.StateCorrupt(
+                    f"{path}['{tid}'].{fk} phai la str, got {type(rec[fk]).__name__}; khong ghi de.")
+    return adm
+
+
 def read_admission(run_dir):
-    """Doc admission.json: thieu/rong -> {}; hong -> StateCorrupt (khong ghi de)."""
+    """Doc admission.json: thieu -> {}; TON TAI ma rong/sai kieu -> StateCorrupt (RV4 P2)."""
     p = admission_path(run_dir)
     try:
         with open(p, encoding="utf-8-sig") as f:
@@ -265,16 +325,16 @@ def read_admission(run_dir):
     except FileNotFoundError:
         return {}
     if not text.strip():
-        return {}
+        raise statefile_mod.StateCorrupt(
+            f"{p} ton tai nhung rong; khong ghi de. "
+            "Sua/xoa tay hoac khoi phuc ban sao.")
     try:
         adm = json.loads(text)
     except ValueError as e:
         raise statefile_mod.StateCorrupt(
             f"{p} khong phai JSON hop le ({e}); khong ghi de. "
             "Sua/xoa tay hoac khoi phuc ban sao.") from e
-    if not isinstance(adm, dict):
-        raise statefile_mod.StateCorrupt(f"{p} phai la object, got {type(adm).__name__}; khong ghi de.")
-    return adm
+    return validate_admission(adm, p)
 
 
 def derive_tasks_started(run_dir):
@@ -329,6 +389,10 @@ def check_action(policy, action, phase=None, usage=None, approved=False):
             warnings.append(f"usage unknown: '{used_key}' chua co so do (coi nhu 0) "
                             f"-- can nguon do/telemetry cho cap {cap_key}")
         used = usage.get(used_key, 0) or 0
+        if isinstance(used, bool) or not isinstance(used, (int, float)):
+            # Ban ghi sai kieu lot qua doc lenient: fail-closed, khong crash TypeError (RV4 P2).
+            return False, (f"usage '{used_key}' sai kieu (got {type(used).__name__}, "
+                           f"can so); fail-closed. Sua usage.json roi chay lai"), warnings
         if used >= cap:
             return False, (f"cham tran {cap_key} ({used}/{cap}); "
                            f"hanh vi on_cap={policy.get('on_cap')}: can nguoi xac nhan"), warnings
