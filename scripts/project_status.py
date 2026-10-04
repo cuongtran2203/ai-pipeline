@@ -153,6 +153,11 @@ def assess(run_dir):
     if ceil_block:
         actions.insert(0, ceil_block)
         blocked.append("ceiling")
+    gj = os.path.join(ROOT, "graphify-out", "graph.json")
+    ev["graphify"] = {"exists": os.path.exists(gj),
+                      "age_days": round((__import__("time").time() - os.path.getmtime(gj)) / 86400, 1) if os.path.exists(gj) else None}
+    if not ev["graphify"]["exists"]:
+        actions.append("Chưa có knowledge graph dự án (Graphify): làm theo skill ai-pipeline-graph (hỏi duyệt cài trước)")
     if not ev["notebook"]["exists"]:
         actions.append("Chưa có sổ thí nghiệm: python scripts/notebook.py init " + run_dir)
     return {

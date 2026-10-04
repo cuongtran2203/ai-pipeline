@@ -9,6 +9,9 @@ Input: a spec file path (see `templates/spec.template.md`). You are the **coordi
 
 **Resuming / "dự án đang ở đâu?"**: if `runs/` already has a run (or the user asks for status), run `ai-pipeline-status` FIRST; it dispatches one assessor agent and tells which phase to execute next. Only then continue.
 
+## Knowledge graph (always at init)
+When ai-pipeline is initialised in a project, ALWAYS build the whole-project knowledge graph with Graphify first (`ai-pipeline-graph`: package/location/backend approvals, exclusions, `--code-only` by default) and refresh it after each phase; agents query it (`graphify query|path|explain`) before grepping.
+
 ## Notebook
 At run start `python scripts/notebook.py init runs/<id> --title "<problem>"`. Workers log experiments; you log a `decision` per gate and 3–5 `insight` entries at the end of every phase; after each phase `notebook.py export` and ask the human to refresh the NotebookLM source (optional). See `ai-pipeline-notebook`.
 
