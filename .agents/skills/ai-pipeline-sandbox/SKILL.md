@@ -17,7 +17,7 @@ description: Mandatory execution rule for the AI pipeline - every deployment, te
 `paddle2onnx` mặc định chạy optimizer Polygraphy và tự `pip install onnx_graphsurgeon` (kéo theo đổi numpy) — luôn export với `--optimize_tool None`; sau mỗi export so `pip freeze` với baseline `requirements.lock`; lệch ⇒ báo `--type error`, gỡ đúng gói lệch trong container của mình.
 
 ## Quy trình
-1. Đầu task: đọc `mode`/`resources` của task trong plan + kiểm tra `decisions.md` có (a) thông tin server/container khi task cần GPU/train (G3), (b) phép chạy local (nếu cần), (c) danh sách gói được phép. Task không train mà thiếu G3 thì cứ chạy (G3 chỉ chặn task `mode: train`). Thiếu thứ task mình cần → `ask`, không đoán và không "tạm cài".
+1. Đầu task: đọc `mode`/`resources` của task trong plan + kiểm tra `decisions.md` có (a) thông tin server/container khi task cần GPU (G3), (b) phép chạy local (nếu cần), (c) danh sách gói được phép. Task không cần G3 thì cứ chạy; G3 chặn task `mode: train` **hoặc** `resources.compute: gpu` (kể cả `evaluate-only` trên GPU). Thiếu thứ task mình cần → `ask`, không đoán và không "tạm cài".
 2. Dựng/dùng container, mount thư mục module + dữ liệu chỉ đọc; chạy lệnh qua `docker exec`; log image tag, lệnh, kết quả vào sổ (`notebook.py log`).
 3. Số đo hiệu năng (latency, v.v.) ghi rõ môi trường đo: container/host, giới hạn CPU/RAM (`--cpus`, `--memory`), vì container có thể khác CPU khách.
 4. Vi phạm đã xảy ra (đã cài/chạy ngoài sandbox) → báo ngay coordinator, ghi `--type error` vào sổ, gỡ phần đã cài nếu được phép; không giấu.

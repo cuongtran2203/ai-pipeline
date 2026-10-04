@@ -105,7 +105,12 @@ def validate_policy(p):
 
 
 def read_usage(run_dir, override=None):
-    """Doc bo dem tich luy runs/<id>/usage.json; thieu file thi coi nhu 0."""
+    """Doc bo dem tich luy runs/<id>/usage.json; thieu file thi coi nhu {} (chua biet).
+
+    Phan biet 'chua biet' voi 0: file/khoa vang khong co nghia la da do duoc 0.
+    check_action() bao 'usage unknown' cho cap tien/token/GPU khong co nguon do
+    thay vi lang le cho qua.
+    """
     p = override or os.path.join(run_dir, USAGE_FILE)
     try:
         with open(p, encoding="utf-8-sig") as f:  # -sig: chiu duoc BOM do PowerShell ghi
@@ -113,6 +118,31 @@ def read_usage(run_dir, override=None):
         return u if isinstance(u, dict) else {}
     except (OSError, ValueError):
         return {}
+
+
+def write_usage(run_dir, usage, override=None):
+    """Ghi usage.json kieu atomic (temp roi replace) de khong mat so lieu khi crash."""
+    p = override or os.path.join(run_dir, USAGE_FILE)
+    os.makedirs(os.path.dirname(os.path.abspath(p)), exist_ok=True)
+    tmp = p + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(usage, f, indent=2, ensure_ascii=False)
+    os.replace(tmp, p)
+    return usage
+
+
+def reserve_task_quota(run_dir, n=1, usage=None, override=None):
+    """Cong don tasks_started ngay vao usage.json ben vung (atomic).
+
+    plan_to_orca --start-ready goi ham nay cho TUNG worker duoc duyet TRUOC KHI
+    start worker do, nen vong check ke tiep trong cung wave thay so lieu moi
+    (cap 1/wave 2 -> worker 2 bi tu choi). Crash giua reserve va start co the
+    de lai quota da tru trong khi worker chua chay: coordinator tru lai
+    (reserve -1) hoac sua usage.json thu cong truoc khi retry.
+    """
+    u = dict(usage) if usage is not None else read_usage(run_dir, override)
+    u["tasks_started"] = (u.get("tasks_started") or 0) + n
+    return write_usage(run_dir, u, override)
 
 
 def mode_of(policy, phase):
@@ -141,7 +171,14 @@ def check_action(policy, action, phase=None, usage=None, approved=False):
         cap = caps.get(cap_key)
         if cap is None:
             continue
-        used = usage.get(USAGE_OF[cap_key], 0) or 0
+        used_key = USAGE_OF[cap_key]
+        if used_key not in usage and cap_key != "max_tasks":
+            # So do chua biet (khong co nguon do/telemetry), khac voi da do duoc 0:
+            # van cho phep (tuong thich) nhung canh bao ro thay vi lang le cho qua.
+            # Rieng max_tasks: file usage vang dong nghia chua start task nao (= 0).
+            warnings.append(f"usage unknown: '{used_key}' chua co so do (coi nhu 0) "
+                            f"-- can nguon do/telemetry cho cap {cap_key}")
+        used = usage.get(used_key, 0) or 0
         if used >= cap:
             return False, (f"cham tran {cap_key} ({used}/{cap}); "
                            f"hanh vi on_cap={policy.get('on_cap')}: can nguoi xac nhan"), warnings

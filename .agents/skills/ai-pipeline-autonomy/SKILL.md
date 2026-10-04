@@ -36,8 +36,12 @@ python scripts/autonomy.py approve runs/<id> --scope M1 --decision approve --rea
 ```
 
 `check` exit 0 = được phép, 2 = bị cấm (lý do in ra). `plan_to_orca.py --start-ready`
-tự gọi `check` trước khi start và từ chối task bị cấm; run chưa có policy vẫn chạy
-(tương thích ngược).
+cấp quota theo từng worker trước khi start (cộng `tasks_started` ngay vào
+`usage.json`, ghi atomic temp+rồi replace): wave vượt cap chỉ start đúng số
+worker trong cap, worker còn lại bị từ chối (`audit start_denied`, exit ≠ 0).
+Cap tiền/token/GPU chưa có số đo thì báo `usage unknown` (coi như 0, cần nguồn
+đo/telemetry) thay vì lặng lẽ cho qua. Run chưa có policy vẫn chạy (tương thích
+ngược, có ghi chú); policy hỏng thì cảnh báo rõ và vẫn chạy.
 
 ## 2. Audit log (`audit.jsonl`, append-only)
 
