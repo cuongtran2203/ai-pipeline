@@ -51,6 +51,12 @@ def require_orca():
 sys.stdout.reconfigure(encoding="utf-8")  # Windows pipes default to cp1252
 sys.stderr.reconfigure(encoding="utf-8")
 
+try:
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import autonomy as autonomy_mod
+except ImportError:  # stdlib-only, khong bao gio fail nang vi thieu policy
+    autonomy_mod = None
+
 
 BUILD_ROLES = {"module-dev", "integrator", "error-analyst", "weakness-diagnostician"}
 
@@ -404,6 +410,31 @@ def main():
         if not todo:
             print("nothing ready (mark finished tasks/gates in done.json)")
             return
+        # Human-on-the-loop: kiem tra autonomy policy truoc khi start (T3).
+        # Khong co policy file -> cho phep (tuong thich nguoc run cu).
+        policy = autonomy_mod.load_policy(run_dir) if autonomy_mod else None
+        if policy is not None and autonomy_mod.validate_policy(policy):
+            sys.exit("policy error: " + "; ".join(autonomy_mod.validate_policy(policy)))
+        usage = autonomy_mod.read_usage(run_dir) if autonomy_mod else {}
+        blocked = []
+        for t in todo:
+            if t.get("kind", "worker") != "worker" or policy is None:
+                continue
+            ok, reason, warns = autonomy_mod.check_action(
+                policy, "start", autonomy_mod.phase_of_task(t), usage)
+            for w in warns:
+                print(f"canh bao policy ({t['id']}): {w}")
+            if not ok:
+                blocked.append((t["id"], reason))
+        if blocked:
+            for tid, reason in blocked:
+                print(f"TREO start {tid}: policy cam -- {reason}")
+                if autonomy_mod:
+                    autonomy_mod.append_audit(run_dir, "start_denied", scope=tid,
+                                              decision="denied", reason=reason)
+            sys.exit("policy: tu choi start %d task (%s). Can nguoi approve/doi policy "
+                     "(autonomy.py approve) roi chay lai --start-ready."
+                     % (len(blocked), ", ".join(t for t, _ in blocked)))
         for t in todo:
             if t.get("kind", "worker") == "gate" and t["id"] in done:
                 started[t["id"]] = True  # gate already answered: nothing to ask
@@ -424,6 +455,10 @@ def main():
                 sys.exit(f"worker start reported failure for {t['id']}: {json.dumps(detail, ensure_ascii=False)}")
             started[t["id"]] = (detail.get("dispatchId") if isinstance(detail, dict) else None) or find_id(receipt) or True  # dispatch id for retry checks
             save_started()  # persist after EACH receipt so a retry never double-starts a worker
+            if autonomy_mod and policy is not None:
+                autonomy_mod.append_audit(run_dir, "start", scope=t["id"], decision="started",
+                                          reason=f"agent={t.get('agent', a.agent)} policy={policy.get('policy_version')}",
+                                          refs=[tmap.get("_run", "")])
             print(f"started {t['id']} ({t.get('agent', a.agent)})")
         return
 

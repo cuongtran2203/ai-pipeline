@@ -52,6 +52,37 @@ def find(run_dir, *names):
     return None
 
 
+def autonomy_summary(run_dir):
+    """T3: tom tat policy/budget/canh bao. None neu run chua co policy."""
+    try:
+        sys.path.insert(0, os.path.join(ROOT, "scripts"))
+        import autonomy as au
+    except ImportError:
+        return None
+    pol = au.load_policy(run_dir)
+    if pol is None:
+        return None
+    if au.validate_policy(pol):
+        return {"policy_version": pol.get("policy_version", "?"), "default_mode": pol.get("default_mode"),
+                "usage": {}, "warnings": ["policy khong hop le: " + "; ".join(au.validate_policy(pol))],
+                "blocked": "policy khong hop le, sua autonomy_policy.json"}
+    usage = au.read_usage(run_dir)
+    caps, warn_at = pol.get("caps") or {}, pol.get("warn_at", 0.8)
+    frac, warnings, blocked = {}, [], ""
+    for cap_key in au.CAP_KEYS:
+        cap = caps.get(cap_key)
+        if cap is None:
+            continue
+        used = usage.get(au.USAGE_OF[cap_key], 0) or 0
+        frac[cap_key] = round(used / cap, 3) if cap else 0
+        if used >= cap:
+            blocked = f"vuot tran {cap_key} ({used}/{cap}): can nguoi duyet truoc khi start tiep"
+        elif used >= warn_at * cap:
+            warnings.append(f"gan tran {cap_key}: {used}/{cap}")
+    return {"policy_version": pol.get("policy_version"), "default_mode": pol.get("default_mode"),
+            "usage": frac, "warnings": warnings, "blocked": blocked}
+
+
 def spec_ok(spec):
     r = subprocess.run([sys.executable, os.path.join(ROOT, "scripts", "validate_spec.py"), spec, "--json"],
                        capture_output=True, text=True, encoding="utf-8")
@@ -176,6 +207,15 @@ def assess(run_dir):
     ev["agents"] = roster and {"orchestrator": roster.get("orchestrator"), **roster.get("groups", {})}
     if not roster:
         actions.append("Chưa chọn agent: python scripts/agent_roster.py detect, hỏi người dùng, rồi select (skill ai-pipeline-agents)")
+    ev["autonomy"] = autonomy_summary(run_dir)  # T3: policy/budget/canh bao human-on-the-loop
+    if ev["autonomy"] is None:
+        actions.append("Chưa có autonomy policy: copy templates/autonomy_policy.template.json thành runs/<id>/autonomy_policy.json, duyệt ở G2 (skill ai-pipeline-autonomy)")
+    else:
+        for w in ev["autonomy"]["warnings"]:
+            actions.insert(0, "Autonomy: " + w)
+        if ev["autonomy"]["blocked"]:
+            blocked.append("autonomy")
+            actions.insert(0, "Autonomy: " + ev["autonomy"]["blocked"])
     gj = os.path.join(ROOT, "graphify-out", "graph.json")
     ev["graphify"] = {"exists": os.path.exists(gj),
                       "age_days": round((__import__("time").time() - os.path.getmtime(gj)) / 86400, 1) if os.path.exists(gj) else None}
@@ -209,6 +249,12 @@ def main():
         print(json.dumps(res, ensure_ascii=False, indent=2))
     else:
         print(f"Run: {run_dir}\nPhase {res['phase']} — {res['phase_name']}  | gates done: {', '.join(res['gates_done']) or '-'}")
+        au = res["evidence"].get("autonomy")
+        if au:
+            use = ", ".join(f"{k}={v * 100:.0f}%" for k, v in au["usage"].items()) or "chua co usage"
+            print(f"Autonomy: policy {au['policy_version']} ({au['default_mode']}) | budget: {use}")
+        else:
+            print("Autonomy: chua co policy")
         if res["modules"]:
             print("Modules: " + ", ".join(f"{m}={'OK' if ok else 'chưa xong'}" for m, ok in res["modules"].items()))
         print("Cần làm tiếp:")
