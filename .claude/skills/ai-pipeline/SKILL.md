@@ -9,6 +9,9 @@ Input: a spec file path (see `templates/spec.template.md`). You are the **coordi
 
 **Resuming / "dự án đang ở đâu?"**: if `runs/` already has a run (or the user asks for status), run `ai-pipeline-status` FIRST; it dispatches one assessor agent and tells which phase to execute next. Only then continue.
 
+## Weak components → diagnose, not guess
+At planning, the architect pre-plans the weakness response for the whole pipeline (`playbook.json` + diagram, approved by the human at G2). When a component scores below target, start a `weakness-diagnostician` agent (`ai-pipeline-diagnose`): it verifies with discriminating experiments whether the cause is DATA (too little real data / synthetic ≠ real), MODEL (capacity, object size, resolution) or AUX (a helper model/module is needed, e.g. split a 6-cell date into characters), or label NOISE, and selects the pre-approved branch.
+
 ## Agent roster (before ANY parallel worker)
 Use the Orca runtime to check which agent runtimes are available (`python scripts/agent_roster.py detect`), let the human choose **one orchestrator** and the **worker agents** (code execution; debate — use different agents), record it with `agent_roster.py select` (`ai-pipeline-agents`). `plan_to_orca.py` refuses to create/start workers without `runs/<id>/agents.json`.
 

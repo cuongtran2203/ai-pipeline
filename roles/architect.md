@@ -19,5 +19,7 @@ Chốt lựa chọn sau debate và lập kế hoạch thực thi.
 
 - Đọc ceiling C0 (`ceiling.json`); plan phải mở đầu build bằng task `B0` `"phase": "probe"` (baseline rẻ + learning curve) trước mọi task train.
 
+- Lên sẵn **playbook xử lý thành phần yếu** (`runs/<id>/playbook.json`, vẽ bằng `python scripts/playbook_diagram.py`): luồng pipeline, rủi ro từng thành phần, kiểm tra rẻ cần chạy trước, hành động theo nguyên nhân DATA / MODEL / AUX / NOISE và trần chi phí. Người dùng duyệt sơ đồ ở G2 (skill `ai-pipeline-diagnose`).
+
 ## Đầu ra
 `architecture.md` (quyết định, sơ đồ module, tiền/hậu xử lý, mục tiêu từng module, phương thức triển khai đề xuất) và `plan.json`. Chạy `python scripts/plan_to_orca.py plan.json --dry-run` để tự kiểm tra trước khi nộp.

@@ -52,7 +52,7 @@ sys.stdout.reconfigure(encoding="utf-8")  # Windows pipes default to cp1252
 sys.stderr.reconfigure(encoding="utf-8")
 
 
-BUILD_ROLES = {"module-dev", "integrator", "error-analyst"}
+BUILD_ROLES = {"module-dev", "integrator", "error-analyst", "weakness-diagnostician"}
 
 
 def is_train_task(t):
@@ -83,7 +83,7 @@ def require_git_for_worktrees(tasks):
                  "Run: git init && git add -A && git commit -m init  (or set \"worktree\": \"current\" per task)")
 
 
-GROUP_OF = {"module-dev": "code", "integrator": "code", "error-analyst": "code", "feasibility-analyst": "code",
+GROUP_OF = {"module-dev": "code", "integrator": "code", "error-analyst": "code", "feasibility-analyst": "code", "weakness-diagnostician": "code",
             "model-proposer": "debate", "critic": "debate", "architect": "debate"}
 
 

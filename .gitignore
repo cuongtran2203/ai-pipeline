@@ -7,3 +7,4 @@ __pycache__/
 graphify-out/
 .venv-graphify/
 vault/
+.playwright-mcp/

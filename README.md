@@ -26,6 +26,7 @@ spec.md ─▶ G1 clarify ─▶ Analysis ×3 ─▶ Debate/Plan ─▶ G2 appro
 | `scripts/obsidian_vault.py [--graphify EXE]` | vault Obsidian: docs + sổ thí nghiệm (wikilinks) + code graph Graphify |
 | `scripts/agent_roster.py detect\|select\|show` | kiểm tra agent khả dụng qua Orca, người dùng chọn orchestrator/workers |
 | `scripts/branch_cleanup.py <run_dir> [--apply --reviewed IDS]` | đóng và xóa nhánh worker đã review (merge/tag lưu trước khi xóa) |
+| `scripts/playbook_diagram.py playbook.json` | sơ đồ playbook xử lý thành phần yếu (HTML + Mermaid) để người dùng duyệt ở G2 |
 | `scripts/sync_skills.py [--check]` | `skills/` → `.claude/skills`, `.agents/skills` |
 
 See `AGENTS.md` for rules and `skills/ai-pipeline/SKILL.md` for the phases.

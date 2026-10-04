@@ -5,6 +5,9 @@ This repo is a multi-agent workflow: **spec file in → plan + parallel executio
 ## Start
 User says "run ai-pipeline on <spec>" → use skill `ai-pipeline` (`skills/ai-pipeline/SKILL.md`; mirrored in `.claude/skills` and `.agents/skills`). Edit only `skills/`, then `python scripts/sync_skills.py`.
 
+## Thành phần yếu: chẩn đoán trước khi sửa
+Khi lên plan, architect lên sẵn playbook xử lý cho cả pipeline (`playbook.json` + sơ đồ `scripts/playbook_diagram.py`, người dùng duyệt ở G2). Thành phần dưới mục tiêu → cử agent `weakness-diagnostician` (skill `ai-pipeline-diagnose`) xác minh bằng thí nghiệm phân biệt: DATA (ít dữ liệu thật / data sinh lệch phân bố), MODEL (thiếu năng lực: đối tượng nhỏ, độ phân giải…), AUX (cần model/module phụ trợ, vd. tách ô/ký tự của vùng date), hay NOISE (nhãn mơ hồ); rồi chọn nhánh hành động đã duyệt. Không sửa theo cảm tính.
+
 ## Đóng nhánh sau khi review
 Khi một nhánh/worktree của worker đã done và orchestrator review (worker_done succeeded + acceptance + diff chỉ gồm file thuộc phạm vi, không có secrets/binary/dữ liệu) không thấy vấn đề → ĐÓNG và XÓA nhánh đó bằng `python scripts/branch_cleanup.py runs/<id> --apply --reviewed <TASK_IDS>` (xem dry-run trước). Không bao giờ xóa mất công việc: nhánh chưa merge thì merge `--no-ff` (new path) hoặc khôi phục file vào run dir; nhánh có commit chưa merge được lưu bằng tag `archive/<branch>` trước khi xóa; từ chối nếu task chưa trong done.json, worktree còn thay đổi chưa commit, hoặc master có thay đổi tracked chưa commit. Có vấn đề khi review → giữ nhánh, sửa/retry, không xóa.
 
