@@ -5,6 +5,11 @@ This repo is a multi-agent workflow: **spec file in → plan + parallel executio
 ## Start
 User says "run ai-pipeline on <spec>" → use skill `ai-pipeline` (`skills/ai-pipeline/SKILL.md`; mirrored in `.claude/skills` and `.agents/skills`). Edit only `skills/`, then `python scripts/sync_skills.py`.
 
+## Chuẩn v2: tổng quát, graph engineering, human-on-the-loop
+- **Tổng quát (mọi loại dự án AI):** đánh giá theo `schemas/eval.schema.json` (đơn vị, split `random|group|temporal|rolling-origin`, metric + hướng tốt, slice/horizon, scorer human|model|rule, độ bất định, provenance); task có execution mode `train|evaluate-only|retrieve-only|inference-service|monitor`; ngôn ngữ báo cáo cấu hình theo run; registry role `roles/registry.json`; ví dụ phi OCR trong `examples/`.
+- **Graph engineering:** tri thức dự án là đồ thị có kiểu append-only `runs/<id>/knowledge/` (`scripts/kg.py`, skill `ai-pipeline-knowledge`): 8 loại node, 8 loại cạnh (depends_on, uses, evaluated_on, decided_by, approved_by, supersedes, caused, evidenced_by), hiệu lực thời gian `valid_from/valid_to/recorded_at`, truy vấn `neighbors|path|explain|timeline --as-of`. Truy nguyên quyết định/evidence bằng truy vấn, không đoán; cạnh sai bị từ chối. `plan.json deps` chỉ là DAG điều phối, không phải cạnh tri thức.
+- **Human-on-the-loop:** `autonomy_policy.json` theo run (mode theo phase, cap, ngưỡng cảnh báo, version) + `audit.jsonl` append-only + `scripts/supervisor.py` (chỉ đọc) với `scripts/orca_snapshot.py`; skill `ai-pipeline-autonomy`. G1/G2/G3 vẫn bắt buộc; ngoài gate pipeline tự chạy trong policy, người giám sát qua cảnh báo.
+
 ## Thành phần yếu: chẩn đoán trước khi sửa
 Khi lên plan, architect lên sẵn playbook xử lý cho cả pipeline (`playbook.json` + sơ đồ `scripts/playbook_diagram.py`, người dùng duyệt ở G2). Thành phần dưới mục tiêu → cử agent `weakness-diagnostician` (skill `ai-pipeline-diagnose`) xác minh bằng thí nghiệm phân biệt (áp dụng cho mọi loại dự án AI): DATA (ít dữ liệu thật / thiếu phủ lát cắt / data sinh lệch phân bố), MODEL (thiếu năng lực, quy mô, độ phân giải, ngữ cảnh), STRUCTURE (cần tách cấu trúc hoặc model/module phụ trợ), OBJECTIVE (metric/ngưỡng/spec lệch), hay NOISE (nhãn mơ hồ); rồi chọn nhánh hành động đã duyệt. Không sửa theo cảm tính.
 

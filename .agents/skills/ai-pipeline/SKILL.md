@@ -12,6 +12,9 @@ Input: a spec file path (see `templates/spec.template.md`). You are the **coordi
 ## Weak components → diagnose, not guess
 At planning, the architect pre-plans the weakness response for the whole pipeline (`playbook.json` + diagram, approved by the human at G2). When a component scores below target, start a `weakness-diagnostician` agent (`ai-pipeline-diagnose`): it verifies with discriminating experiments whether the cause is DATA (too little real data / coverage gaps / synthetic ≠ real), MODEL (capacity, scale, resolution, context), STRUCTURE (a different decomposition or an auxiliary model/module is needed), OBJECTIVE (metric/threshold/spec misaligned) or label NOISE — for any modality — and selects the pre-approved branch.
 
+## Knowledge graph of the run, autonomy policy
+Decisions, experiments, incidents and evidence are recorded as a typed, time-aware graph (`ai-pipeline-knowledge`: `kg.py`, 8 edge types, `--as-of`); status/planning/diagnose must trace decisions through queries, not memory. Each run may carry an `autonomy_policy.json` (modes per phase, caps, warn thresholds, version) with an append-only `audit.jsonl`; at every checkpoint run `orca_snapshot.py` + `supervisor.py` (`ai-pipeline-autonomy`). Gates G1/G2/G3 stay mandatory; outside them the pipeline runs inside the approved policy and the human supervises via alerts.
+
 ## Agent roster (before ANY parallel worker)
 Use the Orca runtime to check which agent runtimes are available (`python scripts/agent_roster.py detect`), let the human choose **one orchestrator** and the **worker agents** (code execution; debate — use different agents), record it with `agent_roster.py select` (`ai-pipeline-agents`). `plan_to_orca.py` refuses to create/start workers without `runs/<id>/agents.json`.
 

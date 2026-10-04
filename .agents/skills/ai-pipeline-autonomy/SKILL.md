@@ -10,6 +10,9 @@ description: Human-on-the-loop for the AI pipeline - per-run autonomy policy, ap
 người chỉ giám sát qua cảnh báo và can thiệp khi lệch chính sách.
 ai-pipeline mặc định **bounded_auto + gate**: gate G1/G2/G3 vẫn bắt buộc, còn lại tự chạy tới khi chạm trần.
 
+## Live supervision (read-only)
+`python scripts/orca_snapshot.py runs/<id> --out runs/<id>/workers.json` turns Orca's `worker-list` into the snapshot the supervisor reads (live workers, last agent-status time, failed ones; a failed dispatch already replaced by a retry is skipped), then `python scripts/supervisor.py runs/<id> --workers runs/<id>/workers.json`. Run both at each coordinator checkpoint (after every wait) and before starting a wave. Neither command starts, stops, retries or releases anything.
+
 ## 1. Policy theo run (`autonomy_policy.json`)
 
 Copy `templates/autonomy_policy.template.json` thành `runs/<id>/autonomy_policy.json`, duyệt ở G2:
