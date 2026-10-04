@@ -22,7 +22,7 @@ description: Phase 2 of the AI pipeline workflow. Multi-agent debate on model se
 - Verify: `python scripts/plan_to_orca.py plan.json --dry-run` succeeds (no cycles).
 
 ## Weakness playbook
-The architect also writes `runs/<id>/playbook.json` and renders `python scripts/playbook_diagram.py runs/<id>/playbook.json` (flow + risk per component + what to do when it is weak: DATA / MODEL / AUX / NOISE, cost caps). Show `playbook.html` to the human at G2 with 3–5 lines of explanation. See `ai-pipeline-diagnose`.
+The architect also writes `runs/<id>/playbook.json` and renders `python scripts/playbook_diagram.py runs/<id>/playbook.json` (flow + risk per component + what to do when it is weak: DATA / MODEL / STRUCTURE / OBJECTIVE / NOISE, cost caps; start from `templates/playbook.template.json`). Show `playbook.html` to the human at G2 with 3–5 lines of explanation. See `ai-pipeline-diagnose`.
 
 ## Gate G2
 Present to the human: **target vs estimated ceiling band (C0)** — if target > upper, offer: lower the target / get more or cleaner data / change scope — then chosen model per module, deployment method options (ask — it depends on the customer), expected metrics/cost, risks. Record the decision in `decisions.md`, mark `G2` done.
