@@ -1,0 +1,63 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "AI pipeline autonomy policy (human-on-the-loop)",
+  "description": "Chinh sach tu chu theo run: mode theo phase, loai thao tac duoc phep, cap task/tien API/thoi gian/GPU-gio/token, nguong canh bao, hanh vi khi cham tran, version. Mac dinh ai-pipeline: bounded_auto + gate.",
+  "type": "object",
+  "required": ["run_id", "policy_version", "default_mode", "modes", "allowed_actions", "caps", "warn_at", "on_cap"],
+  "properties": {
+    "run_id": {"type": "string"},
+    "policy_version": {"type": "string", "description": "Version policy, vd. v1, v2. Moi lan doi policy tang version, giu ban cu (supersedes trong KG)."},
+    "updated_at": {"type": "string"},
+    "updated_by": {"type": "string", "description": "Actor doi policy (vd. person:user)."},
+    "approved_by": {"type": "string", "description": "Nguoi duyet policy tai G2 (vd. person:user)."},
+    "default_mode": {"type": "string", "enum": ["manual", "bounded_auto", "approval_required"]},
+    "modes": {
+      "type": "object",
+      "description": "Mode theo phase; thieu phase thi dung default_mode.",
+      "properties": {
+        "intake": {"type": "string", "enum": ["manual", "bounded_auto", "approval_required"]},
+        "analysis": {"type": "string", "enum": ["manual", "bounded_auto", "approval_required"]},
+        "planning": {"type": "string", "enum": ["manual", "bounded_auto", "approval_required"]},
+        "build": {"type": "string", "enum": ["manual", "bounded_auto", "approval_required"]},
+        "integration": {"type": "string", "enum": ["manual", "bounded_auto", "approval_required"]},
+        "optimize": {"type": "string", "enum": ["manual", "bounded_auto", "approval_required"]},
+        "release": {"type": "string", "enum": ["manual", "bounded_auto", "approval_required"]}
+      },
+      "additionalProperties": false
+    },
+    "allowed_actions": {
+      "type": "array",
+      "description": "Loai thao tac coordinator/worker duoc phep tu dong (ngoai danh sach phai hoi nguoi).",
+      "items": {"type": "string", "enum": ["ask", "start", "stop", "release", "roster_change", "policy_change", "override", "gate"]}
+    },
+    "caps": {
+      "type": "object",
+      "description": "Tran tich luy cua run; null = khong gioi han muc do.",
+      "properties": {
+        "max_tasks": {"type": ["integer", "null"], "minimum": 1},
+        "max_api_cost_usd": {"type": ["number", "null"], "minimum": 0},
+        "max_elapsed_hours": {"type": ["number", "null"], "minimum": 0},
+        "max_gpu_hours": {"type": ["number", "null"], "minimum": 0},
+        "max_tokens": {"type": ["integer", "null"], "minimum": 1}
+      },
+      "additionalProperties": false
+    },
+    "warn_at": {
+      "type": "number",
+      "minimum": 0,
+      "exclusiveMaximum": 1,
+      "description": "Nguong canh bao = phan tram cap (vd. 0.8 = canh bao khi dung >=80% cap)."
+    },
+    "on_cap": {
+      "type": "string",
+      "enum": ["require_approval", "pause", "stop"],
+      "description": "Hanh vi khi cham tran: require_approval (hoi nguoi truoc moi hanh dong tiep), pause (de xuat pause Run, can nguoi xac nhan), stop (de xuat stop/release Run, can nguoi xac nhan). Supervisor khong tu kill/retry."
+    },
+    "stale_worker_minutes": {
+      "type": "integer",
+      "minimum": 1,
+      "default": 15,
+      "description": "Worker khong heartbeat qua so phut nay thi supervisor canh bao im lang."
+    }
+  }
+}

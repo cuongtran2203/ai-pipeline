@@ -1,0 +1,28 @@
+{
+  "run_id": "ai-pipeline-v2",
+  "policy_version": "v1",
+  "updated_at": "2026-10-04 12:00",
+  "updated_by": "person:user",
+  "approved_by": "person:user",
+  "default_mode": "bounded_auto",
+  "modes": {
+    "intake": "manual",
+    "analysis": "bounded_auto",
+    "planning": "bounded_auto",
+    "build": "bounded_auto",
+    "integration": "bounded_auto",
+    "optimize": "approval_required",
+    "release": "manual"
+  },
+  "allowed_actions": ["ask", "start", "gate"],
+  "caps": {
+    "max_tasks": 20,
+    "max_api_cost_usd": 50.0,
+    "max_elapsed_hours": 72.0,
+    "max_gpu_hours": 16.0,
+    "max_tokens": 10000000
+  },
+  "warn_at": 0.8,
+  "on_cap": "require_approval",
+  "stale_worker_minutes": 15
+}
