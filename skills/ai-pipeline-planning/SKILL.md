@@ -12,13 +12,14 @@ description: Phase 2 of the AI pipeline workflow. Multi-agent debate on model se
    If the critic raised a high-severity issue the judge cannot settle with evidence, run one extra cheap verification task before finalizing (max 1 extra round).
 
 ## Plan requirements
-- Inputs include F0 `ceiling.json` (C0 band). The plan must start build with a **B0 baseline probe** (`"phase": "probe"`, role feasibility-analyst) before any full train task; train tasks depend on it.
+- Inputs include F0 `ceiling.json` (C0 band). Khi plan có task train, build bắt đầu bằng **B0 baseline probe** (`"phase": "probe"`, role feasibility-analyst) trước mọi train task; train tasks depend on it. Plan không train (chỉ evaluate/retrieve/serve/monitor) thì bỏ B0.
 - If A1 reports scarce data (hundreds of samples, synthetic only) or B0/C1 diagnoses data-limited, the plan MUST contain a data-generation task (generator tool, train-fold-only sources, per-fold regeneration, ablation per component on val) before the final train rounds; deferring it needs a written reason accepted at G2.
-- Mark `"phase": "train"` / `"build"` explicitly (validation is by field, not by task title).
-- Each module: AI model vs classical algorithm, reasoning tied to the customer's resources and data.
+- Mark execution `"mode"` mỗi task: `train | evaluate-only | retrieve-only | inference-service | monitor` (+ `resources.compute: cpu|gpu`, container có version). Không có mode thì `phase` cũ quyết định (`train`/`probe` = train). Role tra nhóm agent từ `roles/registry.json`.
+- Each module: AI model vs classical algorithm vs retrieval-only/service, reasoning tied to the customer's resources and data.
 - Include pre/post-processing derived from data analysis.
-- Gates G2 and G3 present; every train task depends on G3.
+- Gates: G2 khi có build/mode task; G3 chỉ khi có train task — mỗi task phụ thuộc gate nó cần (train → G3, build → G2).
 - Modules own disjoint directories so build workers can run in parallel.
+- Ngôn ngữ báo cáo của run: `"report_lang": "vi"|"en"` (mặc định vi).
 - Verify: `python scripts/plan_to_orca.py plan.json --dry-run` succeeds (no cycles).
 
 ## Weakness playbook
