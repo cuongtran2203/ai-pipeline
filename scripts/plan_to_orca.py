@@ -114,6 +114,10 @@ def assign_agents(tasks, roster, skip=()):
         elif t["agent"] not in allowed:
             sys.exit(f"roster error: task {t['id']} wants agent '{t['agent']}' which the human did not select "
                      f"(selected: {', '.join(sorted(allowed))}). Edit the plan or re-run agent_roster.py select.")
+        con = (roster.get("constraints") or {}).get(t["agent"], {})
+        if con.get("worktree") and worktree_for(t) in ("new-child", "new-top-level") and not t.get("worktree"):
+            t["worktree"] = con["worktree"]  # e.g. pi only starts reliably with --worktree current (see agents.json)
+            print(f"note: {t['id']} runs on agent {t['agent']} with worktree={con['worktree']} (agent constraint: {con.get('evidence', 'agents.json')})")
 
 
 def ancestors(tid, by_id):

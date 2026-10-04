@@ -6,7 +6,7 @@
       built-in list) and probes each launch command on PATH, plus Orca status/accounts/hosts. Read-only: never installs,
       logs in, or launches an agent session. `--all` also lists catalog agents that are not installed.
 
-  agent_roster.py probe ID [--restore-run RUN_ID] [--timeout 150]
+  agent_roster.py probe ID [--restore-run RUN_ID] [--timeout 150] [--long]
       Readiness test of ONE agent through Orca: starts a throwaway Run and a no-op worker (no file changes, a few tokens),
       waits for worker_done, releases it, and rebinds the coordinator to RUN_ID (default: the run bound now).
       Use it before selecting an agent whose login/model setup you are unsure about (an installed CLI can still fail to start).
@@ -163,9 +163,13 @@ def cmd_probe(a):
     pr = r["result"]["run"]["id"]
     ok, detail = False, ""
     try:
-        s = orca_json("orchestration", "worker-start", "--run", pr, "--spec",
-                      "TASK PROBE: do not read or modify any file. Just finish: send worker_done with outcome succeeded and the one-sentence summary 'probe ok'.",
-                      "--task-title", f"probe {a.id}", "--worktree", "current", "--agent", a.id, timeout=int(a.timeout) + 60)
+        spec = "TASK PROBE: do not read or modify any file. Just finish: send worker_done with outcome succeeded and the one-sentence summary 'probe ok'."
+        if a.long:  # realistic task-spec size/shape: several KB, many lines, quotes, backticks, non-ASCII
+            nl = chr(10)
+            filler = nl.join(f"Constraint {k}: keep `code` intact, quote 'text', use Vietnamese diacritics (ă â ê ô ơ ư đ), paths like C:/work/run-{k}/file.md; padding for the probe only." for k in range(1, 36))
+            spec = spec + nl + nl + "Padding that mimics a real task spec (ignore it):" + nl + filler
+        s = orca_json("orchestration", "worker-start", "--run", pr, "--spec", spec,
+                      "--task-title", f"probe {a.id}", "--worktree", a.worktree, *(["--name", f"probe-{a.id}"] if a.worktree.startswith("new-") else []), "--agent", a.id, timeout=int(a.timeout) + 60)
         res = (s or {}).get("result", {})
         if not s or not s.get("ok") or res.get("state") not in ("ready", "running"):
             detail = f"start failed at stage '{res.get('stage') or res.get('failedStage') or (s or {}).get('error', {}).get('code')}'"
@@ -192,6 +196,8 @@ def cmd_probe(a):
                     detail += " | last output: " + re.sub(r"\n|\s+", " ", txt)[-500:]
                 orca_json("orchestration", "worker-release", "--dispatch", w["dispatchId"])
     finally:
+        if a.worktree.startswith("new-"):
+            orca_json("worktree", "rm", "--worktree", f"branch:probe-{a.id}")
         if restore:
             orca_json("orchestration", "run-use", "--id", restore)
     print(f"probe {a.id}: {'READY (worker_done received)' if ok else 'NOT READY — ' + detail}; coordinator rebound to {restore}")
@@ -242,6 +248,8 @@ def main():
     pr.add_argument("id")
     pr.add_argument("--restore-run")
     pr.add_argument("--timeout", type=int, default=150)
+    pr.add_argument("--worktree", default="current", help="current | new-child (tests the launch path used for build tasks; removes the probe worktree afterwards)")
+    pr.add_argument("--long", action="store_true", help="use a realistic multi-KB task spec (catches agents that drop long prompts)")
     s = sp.add_parser("select")
     s.add_argument("run_dir")
     s.add_argument("--orchestrator", required=True)
