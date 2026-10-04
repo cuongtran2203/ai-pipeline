@@ -14,7 +14,7 @@ Chốt lựa chọn sau debate và lập kế hoạch thực thi.
 ## Nhiệm vụ
 - Đọc proposals + critique; chốt quyết định, ghi lý do và phương án bị loại.
 - Chia pipeline thành module độc lập (ownership thư mục tách biệt để chạy song song).
-- Viết `plan.json` theo `schemas/plan.schema.json`: đặt `"phase": "train"` cho task train và `"phase": "build"` cho task build; gate G2 (duyệt plan) và G3 (thông tin GPU/CUDA/framework) trước task train; mỗi worker có role, agent, deps, owns, acceptance quan sát được.
+- Viết `plan.json` theo `schemas/plan.schema.json`: đặt `"phase": "train"` cho task train và `"phase": "build"` cho task build; gate G2 (duyệt plan) và G3 (thông tin GPU/CUDA/framework) trước mọi task needs_g3 (`mode: train` HOẶC `resources.compute: gpu`, kể cả evaluate-only trên GPU); mỗi worker có role, agent, deps, owns, acceptance quan sát được.
 - Chỉ đặt deps khi có thứ tự thật; ưu tiên wave song song hơn chuỗi dài.
 
 - Đọc ceiling C0 (`ceiling.json`); plan phải mở đầu build bằng task `B0` `"phase": "probe"` (baseline rẻ + learning curve) trước mọi task train.

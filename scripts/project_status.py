@@ -138,7 +138,8 @@ def assess(run_dir):
     ev["build_plan"] = bool(plan)
     ev["G2"], ev["G3"] = "G2" in done, "G3" in done
     plan_tasks = jload(plan, {}).get("tasks", []) if plan else []
-    ev["has_train"] = any(t.get("kind", "worker") == "worker" and task_needs_g3(t) for t in plan_tasks)
+    ev["needs_g3"] = any(t.get("kind", "worker") == "worker" and task_needs_g3(t) for t in plan_tasks)
+    ev["has_train"] = ev["needs_g3"]  # alias cu (tuong thich nguoc): that ra la needs_g3
     ev["report_lang"] = jload(plan, {}).get("report_lang", "vi") if plan else "vi"
 
     mods = sorted(d for d in glob.glob(os.path.join(run_dir, "modules", "*")) if os.path.isdir(d))
@@ -198,11 +199,11 @@ def assess(run_dir):
             blocked.append("G2")
     elif not all(mod_state.get(m) for m in (planned_modules or mod_state)) or not mod_state:
         phase = 3
-        if ev["has_train"] and not ev["G3"]:
+        if ev["needs_g3"] and not ev["G3"]:
             actions.append("Gate G3: xin thông tin GPU server / loại GPU / CUDA / framework trước khi train/dùng GPU")
             blocked.append("G3")
-        elif not ev["has_train"]:
-            actions.append("Plan không có task train/GPU (mode train hoặc compute gpu): không cần G3, chạy trên CPU/container thường")
+        elif not ev["needs_g3"]:
+            actions.append("Plan không có task needs_g3 (mode train hoặc compute gpu): không cần G3, chạy trên CPU/container thường")
         for m in (planned_modules or list(mod_state)):
             if not mod_state.get(m):
                 actions.append(f"Module '{m}' chưa đủ eval.json + report.md + report.html → chạy/tiếp tục module-dev (worktree riêng)")

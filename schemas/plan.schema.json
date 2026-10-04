@@ -20,10 +20,10 @@
           "id": {"type": "string"},
           "kind": {"enum": ["worker", "gate"], "default": "worker"},
           "phase": {"enum": ["train", "build", "probe"], "description": "probe: cheap baseline for ceiling estimate (C1), treated like train; train: needs a dependency path to gate G3 (and G2); build: needs a path to gate G2. Chỉ dùng khi task không có mode; có mode thì mode quyết định."},
-          "mode": {"enum": ["train", "evaluate-only", "retrieve-only", "inference-service", "monitor"], "description": "train: huấn luyện (cần G3); evaluate-only: chỉ đánh giá; retrieve-only: xây index/truy hồi, không train; inference-service: đóng gói/phục vụ; monitor: giám sát drift sau release. G3 chỉ bắt buộc khi có task mode=train."},
-          "resources": {"type": "object", "description": "Tài nguyên task cần (G3/sandbox chỉ bật nơi cần).",
+          "mode": {"enum": ["train", "evaluate-only", "retrieve-only", "inference-service", "monitor"], "description": "train: huấn luyện (cần G3); evaluate-only: chỉ đánh giá; retrieve-only: xây index/truy hồi, không train; inference-service: đóng gói/phục vụ; monitor: giám sát drift sau release. G3 bắt buộc khi task needs_g3 (mode=train HOẶC resources.compute=gpu, kể cả evaluate-only trên GPU), không chỉ khi mode=train."},
+          "resources": {"type": "object", "description": "Tài nguyên task cần (G3/sandbox chỉ bật nơi needs_g3).",
             "properties": {
-              "compute": {"enum": ["cpu", "gpu"]},
+              "compute": {"enum": ["cpu", "gpu"], "description": "compute=gpu kéo theo needs_g3=true (cần gate G3), kể cả mode không phải train."},
               "container": {"type": "string", "description": "Tên/ảnh container sandbox, có version."},
               "notes": {"type": "string"}
             }},
