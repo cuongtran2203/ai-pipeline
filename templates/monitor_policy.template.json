@@ -1,0 +1,45 @@
+{
+  "run_id": "<run_id>",
+  "policy_version": "v1",
+  "updated_at": "2026-10-04 12:00",
+  "approved_by": "person:user",
+  "stale_after_minutes": 1440,
+  "metrics": {
+    "accuracy": {
+      "direction": "higher_is_better",
+      "baseline": {"window": 10},
+      "min_n": 50,
+      "bands": {"warn": 1.0, "diagnose": 2.0, "propose": 3.0}
+    },
+    "em_field": {
+      "direction": "higher_is_better",
+      "baseline": {"window": 10},
+      "min_n": 50,
+      "bands": {"warn": 1.0, "diagnose": 2.0, "propose": 3.0}
+    },
+    "latency_p95_ms": {
+      "direction": "lower_is_better",
+      "baseline": {"window": 10},
+      "min_n": 20,
+      "bands": {"warn": 1.0, "diagnose": 2.0, "propose": 3.0}
+    },
+    "reject_rate": {
+      "direction": "lower_is_better",
+      "baseline": {"window": 10},
+      "min_n": 20,
+      "bands": {"warn": 1.0, "diagnose": 2.0, "propose": 3.0}
+    },
+    "error_rate_5xx": {
+      "direction": "lower_is_better",
+      "baseline": {"window": 10},
+      "min_n": 20,
+      "bands": {"warn": 1.0, "diagnose": 2.0, "propose": 3.0}
+    },
+    "psi_input": {
+      "direction": "lower_is_better",
+      "baseline": {"value": 0.0},
+      "min_n": 30,
+      "bands_abs": {"warn": 0.1, "diagnose": 0.2, "propose": 0.25}
+    }
+  }
+}

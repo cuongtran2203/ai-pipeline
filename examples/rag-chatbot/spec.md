@@ -1,4 +1,4 @@
-﻿# Spec: RAG chatbot hỏi đáp chính sách nội bộ
+# Spec: RAG chatbot hỏi đáp chính sách nội bộ
 
 ## Mục tiêu
 Chatbot trả lời câu hỏi của nhân viên dựa trên kho tài liệu chính sách nội bộ, mọi câu trả lời phải kèm trích dẫn đúng đoạn nguồn và không bịa đặt.

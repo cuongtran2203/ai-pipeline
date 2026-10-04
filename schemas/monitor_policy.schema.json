@@ -1,0 +1,56 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "AI pipeline post-release monitor policy (control band + drift)",
+  "description": "Chinh sach giam sat sau release theo run: moi metric co direction, baseline (cua so tham chieu hoac gia tri co dinh), min_n, bands sigma hoac nguong tuyet doi/PSI. Nguoi duyet o G2. monitor.py check doc policy nay.",
+  "type": "object",
+  "required": ["run_id", "policy_version", "metrics"],
+  "additionalProperties": true,
+  "properties": {
+    "run_id": {"type": "string"},
+    "policy_version": {"type": "string", "description": "Version policy, vd. v1. Moi lan doi tang version, giu ban cu (supersedes trong KG)."},
+    "updated_at": {"type": "string"},
+    "approved_by": {"type": "string", "description": "Nguoi duyet policy tai G2 (vd. person:user)."},
+    "stale_after_minutes": {"type": "integer", "minimum": 1, "description": "Ban ghi cuoi cua metric cu hon so phut nay (so voi --now) thi tang 'stale'."},
+    "metrics": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": {"$ref": "#/$defs/metric"}
+    }
+  },
+  "$defs": {
+    "metric": {
+      "type": "object",
+      "required": ["direction", "baseline"],
+      "additionalProperties": true,
+      "properties": {
+        "direction": {"type": "string", "enum": ["higher_is_better", "lower_is_better"]},
+        "baseline": {
+          "type": "object",
+          "minProperties": 1,
+          "additionalProperties": true,
+          "properties": {
+            "value": {"type": "number", "description": "Gia tri co dinh (thuong dung voi bands_abs)."},
+            "window": {"type": "integer", "minimum": 1, "description": "So ban ghi truoc do lam cua so tham chieu de tinh mean/sigma."},
+            "values": {"type": "array", "items": {"type": "number"}, "description": "Danh sach gia tri tham chieu tuong minh."}
+          }
+        },
+        "min_n": {"type": "integer", "minimum": 1, "description": "Duoi so mau nay khong kich hoat tang diagnose/propose (ha ve warn)."},
+        "bands": {
+          "type": "object",
+          "required": ["warn", "diagnose", "propose"],
+          "additionalProperties": false,
+          "properties": {"warn": {"type": "number"}, "diagnose": {"type": "number"}, "propose": {"type": "number"}},
+          "description": "Nguong theo so lan do lech chuan (1sigma/2sigma/3sigma). Can baseline.window hoac baseline.values de co sigma."
+        },
+        "bands_abs": {
+          "type": "object",
+          "required": ["warn", "diagnose", "propose"],
+          "additionalProperties": false,
+          "properties": {"warn": {"type": "number"}, "diagnose": {"type": "number"}, "propose": {"type": "number"}},
+          "description": "Nguong tuyet doi tren do lech theo huong xau (vd. PSI 0.1/0.2/0.25)."
+        }
+      },
+      "anyOf": [{"required": ["bands"]}, {"required": ["bands_abs"]}]
+    }
+  }
+}

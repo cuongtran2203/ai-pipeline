@@ -1,4 +1,4 @@
-﻿# Spec: phát hiện gian lận thẻ (tabular)
+# Spec: phát hiện gian lận thẻ (tabular)
 
 ## Mục tiêu
 Chấm điểm rủi ro gian lận cho mỗi giao dịch thẻ để chặn giữ tiền theo ngân sách false-positive cho phép.
