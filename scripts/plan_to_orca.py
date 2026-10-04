@@ -69,11 +69,13 @@ class AdmissionDenied(Exception):
 
 # Dinh danh chu giu reservation trong lan chay nay (moi tien trinh 1 gia tri).
 _INVOCATION = uuid.uuid4().hex[:8]
-# Reservation 'reserved' qua han nay duoc coi la stale (chu giu chet giua
-# reserve va call): lan chay moi duoc nhan lai / reconcile duoc giai phong.
-# 'reserved' nghia la CHUA co loi goi Orca nao => nhan lai luon an toan ve
-# phia Orca (khong the double-start). 'starting' thi KHONG bao gio tu nhan
-# lai (co the worker da start nhung mat receipt).
+# STALE_RESERVED_SEC giu lai de tuong thich import (test/caller cu) NHUNG
+# KHONG bao gio dung de quyet dinh takeover giua cac tien trinh: dong ho
+# wall-clock khong dang tin giua tien trinh/may (clock skew, RV4 P1).
+# Takeover chi khi xac minh owner cu da chet/khong con (khong tin dong ho);
+# khong xac minh duoc thi GIU quota va reconcile qua Orca. Lease noi bo (neu
+# can hien thi) chi dung dong ho don dieu time.monotonic(), khong so sanh
+# timestamp wall-clock giua cac tien trinh.
 STALE_RESERVED_SEC = 60
 
 
@@ -81,13 +83,21 @@ def _invocation_owner():
     return "pid-%d-%s" % (os.getpid(), _INVOCATION)
 
 
+def _new_generation():
+    """The fencing moi cho moi reservation (chong ABA: owner cu cham khong
+    ghi de len reservation moi cua owner khac)."""
+    return uuid.uuid4().hex[:12]
+
+
 def _reserved_age_sec(rec):
+    """CHI de hien thi/canh bao: tuoi wall-clock cua ban ghi. KHONG dung de
+    quyet dinh takeover/admission giua cac tien trinh (RV4 P1)."""
     try:
         then = dt.datetime.strptime(str(rec.get("ts", "")), "%Y-%m-%dT%H:%M:%SZ")
         then = then.replace(tzinfo=dt.timezone.utc).timestamp()
         return time.time() - then
     except (ValueError, TypeError, OverflowError):
-        return -1.0  # ts khong parse duoc: coi nhu moi (deny theo huong an toan)
+        return -1.0  # ts khong parse duoc: chi hien thi, khong anh huong admission
 
 
 BUILD_ROLES = {"module-dev", "integrator", "error-analyst", "weakness-diagnostician"}
@@ -355,10 +365,17 @@ def find_id(obj, keys=("id",)):
 
 
 def rd(path, default):
+    """Doc hien thi/roster-skip (khong phai nguon su that de quyet dinh).
+
+    File hong/rong -> default (khong traceback); cac duong quyet dinh
+    (admission/usage/started/policy/task_map) co reader strict rieng
+    fail-closed (RV4 P2). Rieng started.json: roster-skip dung
+    read_started_map strict o duoi khi can (migrate_started exit truoc).
+    """
     try:
         with open(path, encoding="utf-8") as f:
             return json.load(f)
-    except OSError:
+    except (OSError, ValueError):
         return default
 
 
@@ -383,10 +400,15 @@ def must_read_dict(path, what):
 
 
 def migrate_started(run_dir):
-    """started.json list (cu) -> dict, co backup; doc ca 2 dang.
+    """started.json list (cu) -> dict, an toan crash/dong thoi (RV4 P2).
 
-    Gap dang list: chep started.json.bak-<ts UTC> truoc, roi doi sang dict
-    qua statefile (hong -> StateCorrupt: dung, khong ghi de).
+    Doc -> backup -> replace duoi MOT khoa (update_json): hai migration song
+    song duoc serialize, migration thu hai thay dict nen no-op (idempotent,
+    khong them backup). Ten backup doc nhat (UTC + pid + uuid) nen khong ghi
+    de lan nhau. Crash giua backup va replace de lai file goc + backup
+    (khong mat du lieu); crash trong replace duoc bao boi ghi nguyen tu
+    temp/os.replace cua statefile. File TON TAI ma rong la corrupt
+    (fail-closed, khong ghi de); thieu file -> {}.
     """
     path = os.path.join(run_dir, "started.json")
     try:
@@ -395,7 +417,8 @@ def migrate_started(run_dir):
     except FileNotFoundError:
         return {}
     if not text.strip():
-        return {}
+        sys.exit("state error: started.json ton tai nhung rong (corrupt); khong ghi de. "
+                 "Sua/xoa tay hoac khoi phuc ban sao roi chay lai.")
     try:
         raw = json.loads(text)
     except ValueError as e:
@@ -403,23 +426,31 @@ def migrate_started(run_dir):
                  "Sua/xoa tay hoac khoi phuc ban sao roi chay lai.")
     if isinstance(raw, dict):
         return dict(raw)
-    if isinstance(raw, list):
-        bak = path + ".bak-" + time.strftime("%Y%m%dT%H%M%S", time.gmtime())
-        shutil.copyfile(path, bak)
-        print(f"note: migrated started.json list -> dict (backup {os.path.basename(bak)})")
+    if not isinstance(raw, list):
+        sys.exit("state error: started.json phai la object (moi) hoac list (cu); khong ghi de.")
+    marker = "pid%d-%s" % (os.getpid(), uuid.uuid4().hex[:6])
+    stamp = time.strftime("%Y%m%dT%H%M%S", time.gmtime())
 
-        def to_dict(old):
-            if isinstance(old, dict):
-                return old
-            if isinstance(old, list):
-                return {tid: True for tid in old}
-            return old
+    def to_dict(old):
+        if isinstance(old, dict):
+            return old  # tien trinh khac da migrate truoc: idempotent, khong backup
+        if isinstance(old, list):
+            # Backup byte-goc DUOI KHOA (doc lai raw de tranh TOCTOU voi
+            # snapshot ngoai khoa); ten doc nhat nen khong ghi de lan nhau.
+            with open(path, encoding="utf-8-sig") as f:
+                raw_text = f.read()
+            bak = "%s.bak-%s-%s" % (path, stamp, marker)
+            with open(bak, "w", encoding="utf-8", newline="\n") as f:
+                f.write(raw_text)
+            print(f"note: migrated started.json list -> dict (backup {os.path.basename(bak)})")
+            return {tid: True for tid in old}
+        raise statefile_mod.StateCorrupt(
+            "started.json phai la object (moi) hoac list (cu); khong ghi de.")
 
-        try:
-            return statefile_mod.update_json(path, to_dict, default={})
-        except statefile_mod.StateCorrupt as e:
-            sys.exit(f"state error: {e}")
-    sys.exit("state error: started.json phai la object (moi) hoac list (cu); khong ghi de.")
+    try:
+        return statefile_mod.update_json(path, to_dict, default={})
+    except statefile_mod.StateCorrupt as e:
+        sys.exit(f"state error: {e}")
 
 
 def admission_sync_started(run_dir, started, worker_ids=()):
@@ -433,7 +464,7 @@ def admission_sync_started(run_dir, started, worker_ids=()):
     only = set(worker_ids) if worker_ids else None
 
     def fn(adm):
-        adm = dict(adm) if isinstance(adm, dict) else {}
+        adm = _require_dict(adm, autonomy_mod.admission_path(run_dir), "admission")
         for tid, val in started.items():
             if tid in adm or (only is not None and tid not in only):
                 continue
@@ -441,40 +472,88 @@ def admission_sync_started(run_dir, started, worker_ids=()):
                         "dispatch": val if isinstance(val, str) else None}
         return adm
 
+    _contract_not_empty(autonomy_mod.admission_path(run_dir), "admission")
     try:
         statefile_mod.update_json(autonomy_mod.admission_path(run_dir), fn, default={})
     except statefile_mod.StateCorrupt as e:
         sys.exit(f"state error: {e}")
 
 
+def _contract_not_empty(path, what):
+    """File contract TON TAI ma rong -> exit corrupt (fail-closed, KHONG ghi de).
+
+    statefile._read_strict coi rong nhu missing (de tuong thich writer cu);
+    cac duong admission/usage/started goi ham nay TRUOC moi update_json de
+    giu contract RV4 P2: chi file KHONG TON TAI moi la legacy-missing.
+    """
+    try:
+        with open(path, encoding="utf-8-sig") as f:
+            text = f.read()
+    except FileNotFoundError:
+        return
+    except OSError as e:
+        sys.exit(f"state error: khong doc duoc {what} {path} ({e}); khong ghi de.")
+    if not text.strip():
+        sys.exit(f"state error: {what} {path} ton tai nhung rong (corrupt); khong ghi de. "
+                 "Sua/xoa tay hoac khoi phuc ban sao roi chay lai.")
+
+
+def _require_dict(old, path, what):
+    """Ban ghi goc cho update_json: dict -> copy; None ('null') hoac sai kieu
+    -> StateCorrupt (KHONG ep ve {} roi ghi de, RV4 P2)."""
+    if isinstance(old, dict):
+        return dict(old)
+    raise statefile_mod.StateCorrupt(
+        f"{what} {path} phai la object JSON, got "
+        f"{'null' if old is None else type(old).__name__}; khong ghi de. "
+        "Sua/xoa tay hoac khoi phuc ban sao.")
+
+
+def admission_get(run_dir, task_id):
+    """Doc 1 ban ghi admission (owner/generation hien tai de CAS claim).
+    Tra dict hoac None. Hong -> StateCorrupt (fail-closed)."""
+    adm = autonomy_mod.read_admission(run_dir)
+    rec = adm.get(task_id)
+    return dict(rec) if isinstance(rec, dict) else None
+
+
 def admission_reserve(run_dir, task, policy, usage):
     """Check cap + reserve trong 1 khoa ngan (1 update_json tren admission.json).
 
-    Moi reservation ghi ke 'owner' (pid + invocation): task dang active ma
-    chu giu khac minh thi bi tu choi (2 coordinator khong cung nhan quota).
-    Idempotent cho chinh minh (retry cung lan chay). 'reserved' stale
-    (qua STALE_RESERVED_SEC, chu giu coi nhu chet giua reserve va call -
-    chua co loi goi Orca nao) duoc nhan lai an toan. KHONG giu khoa qua
-    loi goi Orca (khoa chi quanh doc-sua-ghi).
+    Moi reservation ghi ke 'owner' (pid + invocation) + 'generation' (fencing
+    chong ABA). Task dang active ma chu giu khac minh thi bi tu choi (2
+    coordinator khong cung nhan quota) — KHONG takeover dua tren tuoi
+    wall-clock (RV4 P1: clock skew co the gay double-start). Idempotent cho
+    chinh minh (retry cung lan chay khong dem 2 lan, giu generation cu).
+    Takeover owner khac chi bang xac minh thu cong (reconcile qua Orca
+    request-show/dispatch-show: worker that su chua start thi sua ban ghi ve
+    'failed'/xoa roi chay lai); khong xac minh duoc thi GIU quota.
+    KHONG giu khoa qua loi goi Orca (khoa chi quanh doc-sua-ghi).
     Tra (True, "", warns) hoac (False, reason, warns).
     """
     warns = []
     owner = _invocation_owner()
+    adm_path = autonomy_mod.admission_path(run_dir)
+    _contract_not_empty(adm_path, "admission")
 
     def fn(adm):
-        adm = dict(adm) if isinstance(adm, dict) else {}
+        try:
+            adm = _require_dict(adm, adm_path, "admission")
+            autonomy_mod.validate_admission(adm, adm_path)
+        except statefile_mod.StateCorrupt as e:
+            sys.exit(f"state error: {e}")
         rec = adm.get(task["id"])
         if isinstance(rec, dict) and rec.get("state") in autonomy_mod.ADMISSION_ACTIVE:
             if rec.get("owner") == owner:
                 return adm  # idempotent: retry cung lan chay khong dem 2 lan
-            if rec.get("state") in ("starting", "started") or _reserved_age_sec(rec) < STALE_RESERVED_SEC:
-                raise AdmissionDenied(
-                    "task dang duoc giu (state=%s, owner=%s, ts=%s): "
-                    "co the 1 coordinator khac dang start; khong nhan quota chong. "
-                    "Neu tien trinh do da chet, doi qua %ds (stale) roi chay lai, "
-                    "hoac --reconcile." % (rec.get("state"), rec.get("owner"),
-                                           rec.get("ts"), STALE_RESERVED_SEC))
-            # 'reserved' stale: chu giu chet truoc loi goi Orca -> nhan lai (cap check lai).
+            raise AdmissionDenied(
+                "task dang duoc giu (state=%s, owner=%s, ts=%s): "
+                "co the 1 coordinator khac dang start; khong nhan quota chong "
+                "(khong takeover theo tuoi wall-clock). Neu tien trinh do chac chan "
+                "da chet VA worker chua tung start (kiem tra qua Orca "
+                "request-show/dispatch-show), sua ban ghi ve 'failed' hoac xoa "
+                "roi chay lai; neu khong xac minh duoc thi GIU quota, chay "
+                "--reconcile." % (rec.get("state"), rec.get("owner"), rec.get("ts")))
         if policy is not None:
             u = dict(usage or {})
             u["tasks_started"] = sum(
@@ -487,8 +566,10 @@ def admission_reserve(run_dir, task, policy, usage):
                 raise AdmissionDenied(reason)
         adm[task["id"]] = {"state": "reserved",
                            "ts": autonomy_mod.utcnow(),
+                           "mono": time.monotonic(),
                            "dispatch": None,
-                           "owner": owner}
+                           "owner": owner,
+                           "generation": _new_generation()}
         return adm
 
     try:
@@ -500,22 +581,86 @@ def admission_reserve(run_dir, task, policy, usage):
     return True, "", warns
 
 
-def admission_mark(run_dir, task_id, state, dispatch=None):
-    """Chuyen trang thai admission (reserved -> starting -> started | failed)."""
+def admission_claim_starting(run_dir, task_id, owner, generation):
+    """CAS reserved -> starting NGAY truoc loi goi Orca (1 khoa, RV4 P1).
+
+    Chi doi state khi owner VA generation con khop (ban ghi cua owner khac
+    khong bao gio bi ghi de; owner cu cham khong the gan dispatch cua minh
+    len reservation moi). Lech -> AdmissionDenied (giu quota, khong call).
+    """
+    def fn(adm):
+        adm = _require_dict(adm, autonomy_mod.admission_path(run_dir), "admission")
+        rec = adm.get(task_id)
+        if not isinstance(rec, dict) or rec.get("state") != "reserved":
+            raise AdmissionDenied(
+                f"claim starting {task_id} that bai: ban ghi khong o 'reserved' "
+                f"(state={rec.get('state') if isinstance(rec, dict) else None}); "
+                "co the da co owner khac hoac da reconcile. GIU quota, khong goi Orca.")
+        if rec.get("owner") != owner or rec.get("generation") != generation:
+            raise AdmissionDenied(
+                f"claim starting {task_id} bi tu choi: owner/generation khong khop "
+                f"(ban ghi owner={rec.get('owner')}); tu choi ghi de ban ghi cua "
+                "owner khac. GIU quota, khong goi Orca.")
+        rec = dict(rec)
+        rec["state"] = "starting"
+        rec["ts"] = autonomy_mod.utcnow()
+        rec["mono"] = time.monotonic()
+        adm[task_id] = rec
+        return adm
+
+    _contract_not_empty(autonomy_mod.admission_path(run_dir), "admission")
+    try:
+        statefile_mod.update_json(autonomy_mod.admission_path(run_dir), fn, default={})
+    except statefile_mod.StateCorrupt as e:
+        sys.exit(f"state error: {e}")
+
+
+def admission_mark(run_dir, task_id, state, dispatch=None, owner=None, generation=None):
+    """Chuyen trang thai admission (reserved -> starting -> started | failed).
+
+    Fencing owner (RV4 P1): neu ban ghi dang co owner khac voi `owner` duoc
+    truyen (hoac generation lech) thi TU CHOI (AdmissionDenied), khong de ban
+    ghi co owner B nhung dispatch A. Caller khong truyen owner (reconcile co
+    bang chung) chi duoc doi state/ts, GIU NGUYEN owner/generation/dispatch
+    (khong gan receipt cua minh len ban ghi nguoi khac).
+    """
     now = autonomy_mod.utcnow() if autonomy_mod else ""
 
     def fn(adm):
-        adm = dict(adm) if isinstance(adm, dict) else {}
+        adm = _require_dict(adm, autonomy_mod.admission_path(run_dir), "admission")
         rec = dict(adm.get(task_id) or {})
+        cur_owner, cur_gen = rec.get("owner"), rec.get("generation")
+        if cur_owner is not None and owner is not None and owner != cur_owner:
+            raise AdmissionDenied(
+                f"admission_mark {task_id} bi tu choi: ban ghi thuoc owner "
+                f"{cur_owner}, caller {owner}. Khong ghi de ban ghi cua owner khac.")
+        if (cur_owner is not None and cur_gen is not None
+                and generation is not None and generation != cur_gen):
+            raise AdmissionDenied(
+                f"admission_mark {task_id} bi tu choi: generation khong khop "
+                "(reservation da moi). Khong ghi de.")
         rec["state"] = state
         rec["ts"] = now
-        if dispatch:
-            rec["dispatch"] = dispatch
+        if owner is None:
+            # Reconcile co bang chung (khong biet owner): chi doi state/ts,
+            # GIU NGUYEN owner/generation/dispatch (khong gan receipt cua
+            # minh len ban ghi cua owner khac).
+            adm[task_id] = rec
+            return adm
+        if cur_owner is None or owner == cur_owner:
+            rec["owner"] = owner
+            if generation is not None:
+                rec["generation"] = generation
+            if dispatch is not None:
+                rec["dispatch"] = dispatch
         adm[task_id] = rec
         return adm
 
     try:
+        _contract_not_empty(autonomy_mod.admission_path(run_dir), "admission")
         return statefile_mod.update_json(autonomy_mod.admission_path(run_dir), fn, default={})
+    except AdmissionDenied:
+        raise
     except statefile_mod.StateCorrupt as e:
         sys.exit(f"state error: {e}")
 
@@ -527,13 +672,98 @@ def sync_usage_tasks(run_dir):
     except statefile_mod.StateCorrupt as e:
         sys.exit(f"state error: {e}")
 
+    usage_path = os.path.join(run_dir, "usage.json")
+    _contract_not_empty(usage_path, "usage")
+
     def fn(u):
-        u = dict(u) if isinstance(u, dict) else {}
+        u = _require_dict(u, usage_path, "usage")
         u["tasks_started"] = used
         return u
 
     try:
-        return statefile_mod.update_json(os.path.join(run_dir, "usage.json"), fn, default={})
+        return statefile_mod.update_json(usage_path, fn, default={})
+    except statefile_mod.StateCorrupt as e:
+        sys.exit(f"state error: {e}")
+
+
+CREATING_PREFIX = "__creating__"
+
+
+class TmapConflict(Exception):
+    """task_map doi duoi chan luc commit (placeholder khong con la cua minh)."""
+
+
+def _claim_token():
+    return "%s:pid-%d-%s" % (CREATING_PREFIX, os.getpid(), uuid.uuid4().hex[:8])
+
+
+def tmap_claim(state_path, key, token):
+    """Claim 1 key trong task_map TRUOC side effect Orca (1 khoa, RV4 P2).
+
+    Tra (status, value): 'claimed' (ta vua dat placeholder, duoc phep goi
+    Orca roi commit) | 'exists' (da co id that, dung lai, khong goi Orca) |
+    'held' (placeholder cua owner khac: KHONG goi Orca, doi/reconcile).
+    Khong bao gio thay ca dict tu snapshot ngoai khoa.
+    """
+    out = {}
+
+    def fn(old):
+        old = _require_dict(old, state_path, "task_map")
+        cur = old.get(key)
+        if isinstance(cur, str) and cur and not cur.startswith(CREATING_PREFIX):
+            out["status"], out["value"] = "exists", cur
+            return old
+        if isinstance(cur, str) and cur.startswith(CREATING_PREFIX):
+            if cur == token:
+                out["status"], out["value"] = "claimed", cur
+            else:
+                out["status"], out["value"] = "held", cur
+            return old
+        old[key] = token
+        out["status"], out["value"] = "claimed", token
+        return old
+
+    try:
+        statefile_mod.update_json(state_path, fn, default={})
+    except statefile_mod.StateCorrupt as e:
+        sys.exit(f"state error: {e}")
+    return out["status"], out["value"]
+
+
+def tmap_commit(state_path, key, token, real_id):
+    """Thay placeholder cua chinh minh bang id that (CAS duoi khoa).
+
+    Placeholder khong con khop -> TmapConflict (KHONG ghi de ban ghi cua
+    owner khac; caller in receipt ra de reconcile tay).
+    """
+    def fn(old):
+        old = _require_dict(old, state_path, "task_map")
+        if old.get(key) != token:
+            raise TmapConflict(
+                f"task_map['{key}'] khong con la placeholder cua minh "
+                f"(hien: {old.get(key)!r}); khong ghi de.")
+        old[key] = real_id
+        return old
+
+    try:
+        statefile_mod.update_json(state_path, fn, default={})
+    except statefile_mod.StateCorrupt as e:
+        sys.exit(f"state error: {e}")
+
+
+def tmap_release(state_path, key, token):
+    """Xoa placeholder cua chinh minh (side effect that bai truoc commit).
+
+    Chi xoa khi van khop token (CAS); ban ghi cua owner khac giu nguyen.
+    """
+    def fn(old):
+        old = _require_dict(old, state_path, "task_map")
+        if old.get(key) == token:
+            del old[key]
+        return old
+
+    try:
+        statefile_mod.update_json(state_path, fn, default={})
     except statefile_mod.StateCorrupt as e:
         sys.exit(f"state error: {e}")
 
@@ -584,41 +814,128 @@ def main():
         require_orca()
         require_git_for_worktrees(tasks)
         state_path = os.path.join(run_dir, "task_map.json")
-        tmap = must_read_dict(state_path, "task_map")
+        my_token = _claim_token()
         # One Orca Run spans the seed plan and the later build plan: reuse the
-        # stored _run, never overwrite it, and keep task ids consistent.
-
-        def save_tmap():
-            try:
-                statefile_mod.update_json(state_path, lambda _old: dict(tmap), default={})
-            except statefile_mod.StateCorrupt as e:
-                sys.exit(f"state error: {e}")
-
-        if tmap.get("_run"):
-            if a.run and a.run != tmap["_run"]:
+        # stored _run, never overwrite it. Claim _run duoi khoa TRUOC
+        # side effect run-create (2 coordinator khong tao Run trung, RV4 P2).
+        st, val = tmap_claim(state_path, "_run", my_token)
+        if st == "exists":
+            if a.run and a.run != val:
                 sys.exit(f"plan error: --run {a.run} conflicts with stored run "
-                         f"{tmap['_run']} in {state_path} (one Run per run dir)")
-            run_id = tmap["_run"]
+                         f"{val} in {state_path} (one Run per run dir)")
+            run_id = val
+        elif st == "held":
+            sys.exit(f"plan error: task_map.json['_run'] dang duoc tao boi owner khac ({val}); "
+                     "doi tien trinh do xong roi chay lai (khong tao Run trung). "
+                     "Neu tien trinh do chac chan da chet (kiem tra qua Orca run-list/task-list "
+                     "khong co Run/Task tuong ung), xoa key '_run' roi chay lai --create.")
         elif a.run:
-            run_id = tmap["_run"] = a.run
-            save_tmap()
+            try:
+                tmap_commit(state_path, "_run", my_token, a.run)
+            except TmapConflict as e:
+                sys.exit(f"plan error: {e}")
+            run_id = a.run
         else:
             out = run([ORCA, "orchestration", "run-create", "--objective", plan.get("objective", plan["title"]), "--json"])
-            run_id = tmap["_run"] = find_id(out)
-            save_tmap()
+            run_id = find_id(out)
+            if not run_id:
+                tmap_release(state_path, "_run", my_token)
+                sys.exit(f"plan error: run-create khong tra id (receipt: {json.dumps(out, ensure_ascii=False)[:300]}); "
+                         "da giai phong claim, chay lai --create.")
+            try:
+                tmap_commit(state_path, "_run", my_token, run_id)
+            except TmapConflict as e:
+                sys.exit(f"plan error: {e} Receipt run-create that lac: {run_id}. "
+                         f"Tu reconcile tay: dat task_map.json['_run'] = '{run_id}' "
+                         "neu Orca run-list xac nhan Run ton tai.")
         # gates are not Orca tasks; a task depending on a gate gets no Orca dep for it (coordinator holds start).
+        # Moi plan ID duoc claim duoi khoa TRUOC task-create (khong snapshot
+        # ngoai khoa roi thay ca dict); 2 coordinator khong tao task Orca
+        # trung; that bai giua chung de lai placeholder de reconcile.
+        worker_ids = {x["id"] for x in tasks if x.get("kind", "worker") == "worker"}
+        known = {"_run": run_id}
+        held, blocked_dep = [], []
+
+        def dep_orca_id(pid):
+            """Id Orca that cua dep worker (claim/commit theo wave truoc do)."""
+            if pid in known:
+                return known[pid]
+            st_d, val_d = tmap_claim(state_path, pid, my_token)
+            if st_d == "exists":
+                known[pid] = val_d
+                return val_d
+            if st_d == "held":
+                if pid not in held:
+                    held.append(pid)
+                return None
+            # Vua claim dep giua chung (khong xay ra khi di theo wave): tha ra
+            # de chu trinh wave truoc tu tao, coi nhu blocked.
+            tmap_release(state_path, pid, my_token)
+            if pid not in held:
+                held.append(pid)
+            return None
+
         for layer in waves(tasks):
             for t in layer:
-                if t.get("kind", "worker") != "worker" or t["id"] in tmap:
+                if t.get("kind", "worker") != "worker":
                     continue
-                deps = [tmap[d] for d in t.get("deps", []) if d in tmap]
+                st, val = tmap_claim(state_path, t["id"], my_token)
+                if st == "exists":
+                    known[t["id"]] = val
+                    continue  # idempotent: id da co duoc dung lai, khong goi Orca
+                if st == "held":
+                    if t["id"] not in held:
+                        held.append(t["id"])
+                    continue  # owner khac dang tao: KHONG tao task Orca trung
+                # Da claim (placeholder cua minh): tao task Orca NGOAI khoa roi commit.
+                deps = []
+                blocked = False
+                for d in t.get("deps", []):
+                    if d not in worker_ids:
+                        continue  # gate: khong phai Orca dep, khong claim
+                    if d in known:
+                        deps.append(known[d])
+                        continue
+                    did = dep_orca_id(d)
+                    if did is None:
+                        blocked = True
+                    else:
+                        deps.append(did)
+                if blocked:
+                    # Dep bi owner khac giu: giai phong claim cua minh, cho dot sau.
+                    tmap_release(state_path, t["id"], my_token)
+                    blocked_dep.append(t["id"])
+                    continue
                 argv = [ORCA, "orchestration", "task-create", "--spec", build_spec(plan, t, run_dir),
                         "--task-title", t["title"], "--run", run_id, "--json"]
                 if deps:
                     argv += ["--deps", json.dumps(deps)]
-                tmap[t["id"]] = find_id(run(argv))
-                save_tmap()
-        print(f"created {len(tmap) - 1} tasks in run {tmap['_run']} -> {state_path}")
+                receipt = run(argv)
+                new_id = find_id(receipt)
+                if not new_id:
+                    tmap_release(state_path, t["id"], my_token)
+                    sys.exit(f"plan error: task-create {t['id']} khong tra id "
+                             f"(receipt: {json.dumps(receipt, ensure_ascii=False)[:300]}); "
+                             "da giai phong claim, chay lai --create.")
+                try:
+                    tmap_commit(state_path, t["id"], my_token, new_id)
+                except TmapConflict as e:
+                    sys.exit(f"plan error: {e} Receipt task-create {t['id']} that lac: {new_id}. "
+                             f"Tu reconcile tay: dat task_map.json['{t['id']}'] = '{new_id}' "
+                             "neu Orca task-list xac nhan Task ton tai.")
+                known[t["id"]] = new_id
+        if held or blocked_dep:
+            detail = ""
+            if held:
+                detail += f" dang bi owner khac giu: {', '.join(held)}."
+            if blocked_dep:
+                detail += f" doi dep: {', '.join(blocked_dep)}."
+            sys.exit(f"plan error: --create chua xong (2 coordinator tranh nhau?).{detail} "
+                     "Doi tien trinh kia xong roi chay lai --create (idempotent: id da co duoc dung lai). "
+                     "Neu tien trinh kia chac chan da chet (Orca task-list khong co Task tuong ung), "
+                     "xoa placeholder '__creating__:*' roi chay lai.")
+        final = must_read_dict(state_path, "task_map")
+        print(f"created {len(final) - 1} tasks in run {final.get('_run')} -> {state_path}")
         return
 
     if a.start_ready:
@@ -638,7 +955,7 @@ def main():
         def save_started(tid, val):
             try:
                 def fn(old):
-                    old = dict(old) if isinstance(old, dict) else {}
+                    old = _require_dict(old, started_path, "started")
                     old[tid] = val
                     return old
 
@@ -703,11 +1020,13 @@ def main():
         except statefile_mod.StateCorrupt as e:
             sys.exit(f"state error: {e}")
         # Admission theo TUNG worker ngay truoc loi goi Orca: check cap +
-        # reserve trong 1 khoa ngan (reserved), ghi starting truoc call,
-        # receipt -> started (+dispatchId), loi RO RANG -> failed (giai phong),
-        # loi KHONG RO (mat receipt) -> giu starting + reconcile, khong doan.
-        # tasks_started suy tu admission/started, khong cong thu cong.
+        # reserve (owner+generation, 1 khoa) -> CAS reserved->starting NGAY
+        # truoc call (kiem owner/generation, chong ghi de, RV4 P1) ->
+        # receipt -> started (+dispatchId, fenced theo owner) | loi RO RANG ->
+        # failed (giai phong) | loi KHONG RO (mat receipt) -> giu starting +
+        # reconcile, khong doan. tasks_started suy tu admission/started.
         blocked = []
+        my_owner = _invocation_owner()
         for t in todo:
             if t.get("kind", "worker") == "gate" and t["id"] in done:
                 save_started(t["id"], True)  # gate already answered: nothing to ask
@@ -727,8 +1046,24 @@ def main():
                 autonomy_mod.append_audit(run_dir, "start_denied", scope=t["id"],
                                           decision="denied", reason=reason)
                 continue  # vuot cap: da ghi audit start_denied o vong admission, bao exit o cuoi
+            mine = admission_get(run_dir, t["id"])
+            if not mine or mine.get("owner") != my_owner or mine.get("state") != "reserved":
+                blocked.append((t["id"], "reservation khong con thuoc minh sau reserve "
+                                        "(co the bi reconcile doi); GIU quota, khong goi Orca"))
+                autonomy_mod.append_audit(run_dir, "start_denied", scope=t["id"],
+                                          decision="denied",
+                                          reason="reservation doi chu sau reserve")
+                continue
+            my_gen = mine.get("generation")
+            try:
+                # CAS NGAY truoc call: crash sau day con bang chung 'starting'.
+                admission_claim_starting(run_dir, t["id"], my_owner, my_gen)
+            except AdmissionDenied as e:
+                blocked.append((t["id"], str(e)))
+                autonomy_mod.append_audit(run_dir, "start_denied", scope=t["id"],
+                                          decision="denied", reason=str(e))
+                continue
             sync_usage_tasks(run_dir)  # dong bo tasks_started suy tu admission (fail-closed khi hong)
-            admission_mark(run_dir, t["id"], "starting")  # ghi truoc call: crash sau day con bang chung
             try:
                 receipt = run(worker_argv(t, tmap[t["id"]], a.agent, plan["run_id"]) + ["--run", tmap["_run"]])
             except Exception as e:  # loi khong ro (mat receipt...): GIU starting, reconcile truoc retry
@@ -737,7 +1072,8 @@ def main():
                          "bang chung) hoac kiem tra thu cong qua Orca request-show/dispatch-show "
                          "truoc khi retry.")
             if isinstance(receipt, dict) and receipt.get("ok") is False:
-                admission_mark(run_dir, t["id"], "failed")  # loi ro rang: giai phong quota
+                admission_mark(run_dir, t["id"], "failed",
+                               owner=my_owner, generation=my_gen)  # loi ro rang: giai phong quota
                 sync_usage_tasks(run_dir)
                 autonomy_mod.append_audit(run_dir, "start_failed", scope=t["id"],
                                           decision="failed",
@@ -745,14 +1081,22 @@ def main():
                 sys.exit(f"worker start failed for {t['id']}: {json.dumps(receipt, ensure_ascii=False)}")
             detail = receipt.get("result", {}) if isinstance(receipt, dict) else {}
             if isinstance(detail, dict) and (detail.get("failedStage") or detail.get("residualResources")):
-                admission_mark(run_dir, t["id"], "failed")  # loi ro rang: giai phong quota
+                admission_mark(run_dir, t["id"], "failed",
+                               owner=my_owner, generation=my_gen)  # loi ro rang: giai phong quota
                 sync_usage_tasks(run_dir)
                 autonomy_mod.append_audit(run_dir, "start_failed", scope=t["id"],
                                           decision="failed",
                                           reason=f"worker-start bao loi: {json.dumps(detail, ensure_ascii=False)}")
                 sys.exit(f"worker start reported failure for {t['id']}: {json.dumps(detail, ensure_ascii=False)}")
             dispatch = (detail.get("dispatchId") if isinstance(detail, dict) else None) or find_id(receipt) or True  # dispatch id for retry checks
-            admission_mark(run_dir, t["id"], "started", dispatch=dispatch if isinstance(dispatch, str) else None)
+            try:
+                admission_mark(run_dir, t["id"], "started",
+                               dispatch=dispatch if isinstance(dispatch, str) else None,
+                               owner=my_owner, generation=my_gen)
+            except AdmissionDenied as e:
+                sys.exit(f"worker start xong nhung khong mark duoc {t['id']} ({e}): "
+                         "reservation da doi chu (co the reconcile). Kiem tra thu cong qua Orca "
+                         "dispatch-show truoc khi retry; receipt giu de doi chieu.")
             save_started(t["id"], dispatch)  # persist after EACH receipt so a retry never double-starts a worker
             sync_usage_tasks(run_dir)
             if autonomy_mod and policy is not None:
@@ -769,9 +1113,11 @@ def main():
         return
 
     if a.reconcile:
-        # Reconcile admission 'starting': chi nhan started khi co bang chung
-        # (done.json hoac started.json, doc ca dang cu); con lai giu nguyen
-        # va in huong dan kiem tra thu cong. KHONG giai phong quota theo suy doan.
+        # Reconcile admission: chi nhan 'starting' -> 'started' khi co bang
+        # chung (done.json hoac started.json); 'reserved' KHONG bao gio tu
+        # giai phong theo tuoi wall-clock (RV4 P1: clock skew, owner co the
+        # con song). 'reserved'/'starting' khong bang chung duoc GIU + huong
+        # dan kiem tra thu cong qua Orca. KHONG giai phong quota theo suy doan.
         started = migrate_started(run_dir)
         workers = [t for t in tasks if t.get("kind", "worker") == "worker"]
         admission_sync_started(run_dir, started, [t["id"] for t in workers])
@@ -780,32 +1126,35 @@ def main():
         except statefile_mod.StateCorrupt as e:
             sys.exit(f"state error: {e}")
         done = set(rd(os.path.join(run_dir, "done.json"), []))
-        promoted, released = [], []
+        promoted = []
         for tid, rec in sorted(adm.items()):
-            if not (isinstance(rec, dict) and rec.get("state") in ("starting", "reserved")):
+            if not (isinstance(rec, dict) and rec.get("state") == "starting"):
                 continue
-            if rec.get("state") == "starting" and (tid in done or tid in started):
-                admission_mark(run_dir, tid, "started")
+            if tid in done or tid in started:
+                admission_mark(run_dir, tid, "started")  # giu owner/dispatch cu
                 promoted.append(tid)
-            elif rec.get("state") == "reserved" and _reserved_age_sec(rec) >= STALE_RESERVED_SEC:
-                # 'reserved' nghia la CHUA co loi goi Orca nao: giai phong an toan.
-                admission_mark(run_dir, tid, "failed")
-                released.append(tid)
         if promoted:
             print(f"reconciled -> started (co bang chung done/started): {', '.join(promoted)}")
-        if released:
-            print(f"reconciled -> failed (reserved stale, chua tung goi Orca): {', '.join(released)}")
         still = sorted(tid for tid, rec in autonomy_mod.read_admission(run_dir).items()
                        if isinstance(rec, dict) and rec.get("state") == "starting"
                        and tid not in done and tid not in started)
-        if still:
-            for tid in still:
-                print(f"giu 'starting' cho {tid} (dispatch={adm[tid].get('dispatch')}): kiem tra thu cong qua "
-                      "Orca request-show/dispatch-show; neu worker that su chua start thi sua admission.json "
-                      "ve 'failed' (giai phong quota) hoac xoa ban ghi roi chay lai --start-ready.")
-            sys.exit("reconcile: con %d task 'starting' khong bang chung (%s)."
-                     % (len(still), ", ".join(still)))
-        print("reconcile xong: khong con task 'starting' thieu bang chung.")
+        held_reserved = sorted(tid for tid, rec in autonomy_mod.read_admission(run_dir).items()
+                               if isinstance(rec, dict) and rec.get("state") == "reserved")
+        for tid in still:
+            print(f"giu 'starting' cho {tid} (owner={adm[tid].get('owner')}, "
+                  f"dispatch={adm[tid].get('dispatch')}): kiem tra thu cong qua "
+                  "Orca request-show/dispatch-show; neu worker that su chua start thi sua admission.json "
+                  "ve 'failed' (giai phong quota) hoac xoa ban ghi roi chay lai --start-ready.")
+        for tid in held_reserved:
+            print(f"giu 'reserved' cho {tid} (owner={adm[tid].get('owner')}): KHONG tu giai phong "
+                  "theo tuoi wall-clock. Neu owner chac chan da chet VA worker chua tung start "
+                  "(kiem tra qua Orca request-show/dispatch-show), sua ban ghi ve 'failed' hoac xoa "
+                  "roi chay lai --start-ready; neu khong xac minh duoc thi GIU quota.")
+        if still or held_reserved:
+            pending = sorted(set(still) | set(held_reserved))
+            sys.exit("reconcile: con %d task giu quota khong bang chung (%s)."
+                     % (len(pending), ", ".join(pending)))
+        print("reconcile xong: khong con task giu quota thieu bang chung.")
         return
 
     # dry run (default): DAG description only — NOT directly runnable.
