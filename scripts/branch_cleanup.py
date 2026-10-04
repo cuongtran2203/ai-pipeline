@@ -85,10 +85,13 @@ def main():
             why.append("worktree has uncommitted changes")
         files = [f for f in git("diff", "--name-only", f"master...{b}").stdout.splitlines() if f]
         states = {f: file_state(b, f) for f in files} if ahead else {}
-        missing = [f for f, s in states.items() if s == "missing"]
+        in_master = {f: git("cat-file", "-e", f"master:{f}").returncode == 0 for f in states}
+        # a file already tracked on master that the branch changes is NOT "captured on disk": it must be merged
+        needs_merge_tracked = [f for f, st in states.items() if in_master[f] and st != "same"]
+        missing = [f for f, st in states.items() if st == "missing" and not in_master[f]]
         ignored_missing = [f for f in missing if git("check-ignore", "-q", f).returncode == 0]
-        plain_missing = [f for f in missing if f not in ignored_missing]
-        differs = [f for f, s in states.items() if s == "differs"]
+        plain_missing = [f for f in missing if f not in ignored_missing] + needs_merge_tracked
+        differs = [f for f, st in states.items() if st == "differs" and not in_master[f]]
         plan = "delete (merged)" if not ahead else (
             f"{'merge ' if plain_missing else ''}{'restore ' + str(len(ignored_missing)) + ' ignored file(s) ' if ignored_missing else ''}"
             f"archive-tag + delete".strip())
