@@ -26,6 +26,7 @@ REQUIRED = {
                 "Chỉ tiêu mong muốn: độ chính xác, tốc độ, chi phí?"),
 }
 PLACEHOLDER = re.compile(r"(TODO|TBD|\?\?\?|<[^>]+>|\[điền|\[fill)", re.I)
+OPTIONAL = re.compile(r"tuy chon|tùy chọn|optional", re.I)  # mục bổ sung (eval contract, split...) không thay mục bắt buộc
 
 
 sys.stdout.reconfigure(encoding="utf-8")  # Windows pipes default to cp1252
@@ -49,7 +50,8 @@ def split_sections(text):
 
 
 def find_all(sections, pattern):
-    return [(title, body) for title, body in sections if re.search(pattern, title.lower())]
+    return [(title, body) for title, body in sections
+            if re.search(pattern, title.lower()) and not OPTIONAL.search(title)]
 
 
 def validate(text):

@@ -14,7 +14,9 @@ Phân tích và kiểm định dataset; đây là phần quan trọng nhất.
 ## Nhiệm vụ
 - Tình trạng data: số lượng, phân bố (dùng thống kê/công thức), đã gán nhãn chưa.
 - Chỉ có vài mẫu → đề xuất cách mở rộng; chỉ có mô tả → thiết kế tool sinh data và nêu rõ: synth chỉ đảm bảo nhận diện pattern, KHÔNG đảm bảo độ chính xác trên prod.
-- Có data real: bắt buộc gán nhãn tập eval real (tối thiểu 50 mẫu); chia train/val/test; chỉ real mới lộ điểm mạnh/yếu.
+- Có data real: bắt buộc gán nhãn tập eval real **riêng** (không lẫn train); chia train/val/test; chỉ real mới lộ điểm mạnh/yếu.
+- **Cỡ mẫu eval theo đơn vị/metric/base rate, không dùng một ngưỡng cứng cho mọi bài toán.** Gợi ý mặc định (ghi rõ giả định khi dùng): ≥100 đơn vị đánh giá cho metric tổng; lớp/slice hiếm cần ≥50 mẫu dương tính mỗi lớp (sai số chuẩn của tỷ lệ ≈ √(p(1−p)/n): n=100 cho SE≈5% ở p=0.5). Base rate càng thấp, càng cần nhiều mẫu để giữ khoảng tin cậy hẹp — nêu công thức và chốt con số theo bài toán trong `data_analysis.md`.
+- **Split/leakage policy** (ghi vào data card `dataset_card.md`): chiến lược `random | group | temporal | rolling-origin` + lý do; group key / mốc cắt thời gian / embargo; định nghĩa **as-of** cho mọi feature (chỉ dùng thông tin có trước thời điểm chấm); **leakage audit** (kiểm tra trùng entity/thời gian giữa các fold, feature nào nhìn tương lai) trước vòng train đầu.
 - Không có real: bàn kỹ cách sinh để phân bố synth sát real nhất.
 - Đề xuất tiền xử lý dựa trên quan sát data.
 - Dữ liệu ít (vài trăm mẫu trở xuống) hoặc chỉ có synthetic: BẮT BUỘC có mục "Kế hoạch sinh dữ liệu" trong `data_analysis.md`: thành phần sinh (in / viết tay / augment), nguồn gốc từng thành phần (chỉ từ train fold), rủi ro synthetic-of-synthetic, cách ablation chứng minh có ích, version `ds-v2-synth`. Không chỉ nêu ý tưởng chung chung.

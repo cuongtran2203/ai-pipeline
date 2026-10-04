@@ -1,0 +1,74 @@
+{
+  "title": "RAG chatbot — retriever v0.3 (no training)",
+  "lang": "en",
+  "version": {"model": "rag-ret-v0.3", "dataset": "ds-rag-v1 (400 QA labeled + snapshot kb-v1.4)"},
+  "baseline_name": "rag-ret-v0.2",
+  "eval_contract": {
+    "unit": "question",
+    "split": {"strategy": "group", "details": "group key = user session; index built from kb snapshot v1.4 only"},
+    "metrics": [
+      {"name": "faithfulness", "direction": "higher"},
+      {"name": "citation precision", "direction": "higher"},
+      {"name": "recall@5", "direction": "higher"},
+      {"name": "p95 latency (s)", "direction": "lower"}
+    ],
+    "slices": ["factual", "how-to"],
+    "scorer": {"kind": "model", "details": "LLM-judge rubric v1 + 10% human spot-check"},
+    "uncertainty": {"method": "bootstrap 1000", "level": 0.95},
+    "provenance": {"eval_set_version": "qa-v1", "labeled_by": "domain team", "date": "2026-09-20"}
+  },
+  "overview": {
+    "status": "Baseline v0.2: faithfulness 0.81, citation precision 0.87 on 400 labeled QA. Issue: missing citations on how-to questions.",
+    "method": "New chunking (512 tokens, overlap 64) + reranker top-20; judge rubric unchanged.",
+    "result": "Faithfulness +0.05, citation precision +0.04; latency p95 +0.3s (within budget 4s)."
+  },
+  "tables": [
+    {
+      "name": "factual (n=240)",
+      "eval_set": "qa-v1 labeled 400",
+      "split": "group by session",
+      "scorer": "LLM-judge + spot-check",
+      "rows": [
+        {"item": "faithfulness", "value": 0.88, "n": 240, "ci": "0.84–0.92", "prev_value": 0.83},
+        {"item": "citation precision", "value": 0.93, "n": 240, "ci": "0.90–0.96", "prev_value": 0.89},
+        {"item": "recall@5", "value": 0.84, "n": 240, "prev_value": 0.81}
+      ]
+    },
+    {
+      "name": "how-to (n=160)",
+      "eval_set": "qa-v1 labeled 400",
+      "rows": [
+        {"item": "faithfulness", "n": 160, "prev_value": 0.78, "prev_set": "qa-v0 pilot 90",
+         "prev_metric": "faithfulness"}
+      ]
+    }
+  ],
+  "errors": [
+    {
+      "cluster": "Missing citation on multi-step answers",
+      "count": 14,
+      "denominator": 400,
+      "fields": "how-to slice",
+      "cause": "Confirmed: reranker drops step-2 passages.",
+      "examples": [{"where": "q-118", "note": "step 2 has no citation"}]
+    },
+    {
+      "cluster": "Latency spike on long documents",
+      "count": 9,
+      "denominator": 400,
+      "fields": "p95 latency",
+      "cause": "Hypothesis: reranker top-20 too wide.",
+      "examples": [{"where": "q-301", "note": "6.1s on 40-page policy"}]
+    }
+  ],
+  "conclusion": {
+    "fixes": [
+      {"priority": "P1", "error": "Missing citation", "fix": "Retrieve per-step then merge citations",
+       "measure": "citation precision on how-to >= 0.90"},
+      {"priority": "P2", "error": "Latency spike", "fix": "Reranker top-20 -> top-10 with fallback",
+       "measure": "p95 <= 4s on qa-v1"}
+    ],
+    "recommend": "Ship v0.3 behind flag; keep v0.2 until how-to slice is measured on qa-v1."
+  },
+  "artifacts": [{"label": "eval.json", "path": "examples/rag-chatbot/eval.json"}]
+}

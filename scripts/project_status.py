@@ -18,6 +18,17 @@ sys.stdout.reconfigure(encoding="utf-8")
 sys.stderr.reconfigure(encoding="utf-8")
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 MAX_OPT_ROUNDS = 3
+MODULE_MODES = ("train", "evaluate-only", "retrieve-only", "inference-service")
+
+
+def task_mode(t):
+    if t.get("mode") in MODULE_MODES + ("monitor",):
+        return t["mode"]
+    if t.get("phase") in ("train", "probe"):  # legacy: phase train/probe = train
+        return "train"
+    if any(w in t.get("id", "").lower() for w in ("train",)) or t.get("role") == "trainer":
+        return "train"
+    return None
 
 
 def newest_run():
@@ -67,12 +78,17 @@ def assess(run_dir):
     }.items():
         ev[k] = bool(find(run_dir, *names))
     # a run may hold a seed plan (run root) and the architect's build plan (artifacts/*/plan.json): use the one with build tasks
+    # (legacy role check giữ nguyên để tương thích; cộng thêm task có execution mode mới)
     plans = [p for p in glob.glob(os.path.join(run_dir, "**", "plan.json"), recursive=True)
-             if any(t.get("kind", "worker") == "worker" and t.get("role") in ("module-dev", "integrator")
+             if any(t.get("kind", "worker") == "worker" and (t.get("mode") in MODULE_MODES + ("monitor",)
+                    or t.get("role") in ("module-dev", "integrator"))
                     for t in jload(p, {}).get("tasks", []))]
     plan = plans[0] if plans else None
     ev["build_plan"] = bool(plan)
     ev["G2"], ev["G3"] = "G2" in done, "G3" in done
+    plan_tasks = jload(plan, {}).get("tasks", []) if plan else []
+    ev["has_train"] = any(t.get("kind", "worker") == "worker" and task_mode(t) == "train" for t in plan_tasks)
+    ev["report_lang"] = jload(plan, {}).get("report_lang", "vi") if plan else "vi"
 
     mods = sorted(d for d in glob.glob(os.path.join(run_dir, "modules", "*")) if os.path.isdir(d))
     mod_state = {os.path.basename(m): all(os.path.exists(os.path.join(m, f)) for f in ("eval.json", "report.md", "report.html"))
@@ -80,7 +96,8 @@ def assess(run_dir):
     planned_modules = []
     if plan:
         planned_modules = [os.path.basename(o.rstrip("/\\")) for t in jload(plan, {}).get("tasks", [])
-                           if t.get("role") == "module-dev" for o in t.get("owns", [])[:1]]
+                           if t.get("role") == "module-dev" or t.get("mode") in MODULE_MODES
+                           for o in t.get("owns", [])[:1]]
     e2e = find(run_dir, os.path.join("e2e", "eval.json")) or next(iter(glob.glob(os.path.join(run_dir, "artifacts", "I*", "eval.json"))), None)
     ev["e2e_eval"] = bool(e2e)
     ev["e2e_reports"] = bool(e2e) and all(os.path.exists(os.path.join(os.path.dirname(e2e), f)) for f in ("report.md", "report.html"))
@@ -130,9 +147,11 @@ def assess(run_dir):
             blocked.append("G2")
     elif not all(mod_state.get(m) for m in (planned_modules or mod_state)) or not mod_state:
         phase = 3
-        if not ev["G3"]:
+        if ev["has_train"] and not ev["G3"]:
             actions.append("Gate G3: xin thông tin GPU server / loại GPU / CUDA / framework trước khi train")
             blocked.append("G3")
+        elif not ev["has_train"]:
+            actions.append("Plan không có task train (mode evaluate/retrieve/serve/monitor): không cần G3, chạy trên CPU/container thường")
         for m in (planned_modules or list(mod_state)):
             if not mod_state.get(m):
                 actions.append(f"Module '{m}' chưa đủ eval.json + report.md + report.html → chạy/tiếp tục module-dev (worktree riêng)")
