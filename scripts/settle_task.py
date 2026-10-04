@@ -158,7 +158,7 @@ def reconcile(run_dir):
     if not pending:
         print("no pending KG sync")
         return 0
-    failed = {}
+    failed, succeeded = {}, {}
     for plan_id, rec in pending.items():
         try:
             sync_kg_task(run_dir, plan_id)
@@ -166,11 +166,22 @@ def reconcile(run_dir):
             failed[plan_id] = {"error": str(ex), "ts": _now()}
             print(f"  still pending: {plan_id} ({ex})", file=sys.stderr)
         else:
+            succeeded[plan_id] = rec
             print(f"  reconciled: {plan_id}")
+
     def fn(data):
-        return failed
+        data = data if isinstance(data, dict) else {}
+        # Chỉ xoá key đã sync thành công khi giá trị hiện tại VẪN khớp giá trị đã đọc;
+        # key do writer khác thêm/đổi trong lúc sync được giữ nguyên (không xoá công việc mới).
+        for plan_id, rec in succeeded.items():
+            if data.get(plan_id) == rec:
+                data.pop(plan_id, None)
+        for plan_id, rec in failed.items():
+            data[plan_id] = rec
+        return data
+
     statefile.update_json(_pending_path(run_dir), fn, default={})
-    print(f"reconcile: {len(pending) - len(failed)} ok, {len(failed)} còn pending")
+    print(f"reconcile: {len(succeeded)} ok, {len(failed)} còn pending")
     return 1 if failed else 0
 
 

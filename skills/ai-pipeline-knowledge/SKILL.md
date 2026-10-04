@@ -90,10 +90,21 @@ API validate enum, tồn tại node, kiểu đầu–cuối, thứ tự thời g
 ### ID ổn định cho notebook
 `notebook.py log` gắn khóa nguồn ổn định `run#<ordinal>-<hash8>-<uuid8>` vào trường `id` của mục journal. Ordinal được cấp **dưới khóa journal** nên hai worker đồng thời không đụng ordinal và không mất mục; UUID khiến hai mục giống hệt trong cùng một phút vẫn thành hai node khác nhau. ID thực thể KG suy từ khóa này nên **tiêu đề trùng / nội dung trùng không đụng ID**. `refs` giữ **đường dẫn chuẩn hoá theo gốc dự án** (`runs/x/../y/a.json` == `runs/y/a.json`, POSIX separators, kèm `version` nếu nhận ra); ref nằm **ngoài gốc dự án bị từ chối/đánh dấu**, không sinh `../../..`.
 
-Mục journal **cũ không có `id`** được cấp khóa nguồn ổn định **một lần** khi migration (kèm backup `journal.jsonl.bak-<ts>`), lưu thẳng vào `journal.jsonl`; về sau không tái tính theo vị trí, nên hai mục giống hệt vẫn là hai node. `journal.md`/`insights.md` được rebuild atomic từ snapshot.
+Mục journal **cũ không có `id`** được cấp khóa nguồn ổn định **một lần** khi migration (kèm backup `journal.jsonl.bak-<ts>`), lưu thẳng vào `journal.jsonl`; về sau không tái tính theo vị trí, nên hai mục giống hệt vẫn là hai node. `journal.md`/`insights.md` được rebuild atomic; snapshot journal được **chụp bên trong render lock** nên rebuild cũ không thể ghi đè rebuild mới (`journal.md` luôn đủ mọi mục của `journal.jsonl`).
 
 ### Pending sync & reconcile
-Nếu đồng bộ KG lỗi, `settle_task.py` ghi `knowledge/sync_pending.json`, `notebook.py` ghi `notebook/sync_pending.json` — **không** làm hỏng `done.json`/journal. Chạy lại bằng `settle_task.py <run_dir> --reconcile` hoặc `notebook.py reconcile <run_dir>`.
+Nếu đồng bộ KG lỗi, `settle_task.py` ghi `knowledge/sync_pending.json`, `notebook.py` ghi `notebook/sync_pending.json` — **không** làm hỏng `done.json`/journal. Chạy lại bằng `settle_task.py <run_dir> --reconcile` hoặc `notebook.py reconcile <run_dir>`. Reconcile **chỉ xoá key đã sync thành công khi giá trị hiện tại vẫn khớp giá trị đã đọc**, nên key do writer khác thêm/đổi trong lúc sync không bị xoá mất.
+
+### Dọn cạnh legacy (`quarantine`)
+Khi đồ thị còn cạnh không hợp lệ do writer cũ (ví dụ `Artifact -> Task evidenced_by`), dùng:
+```sh
+python scripts/kg.py quarantine runs/<id>            # dry-run: liệt kê cạnh sai + lý do, KHÔNG sửa
+python scripts/kg.py quarantine runs/<id> --apply    # backup entities/edges (tên độc nhất) rồi chuyển cạnh sai
+```
+`--apply` **chỉ** chuyển các cạnh không hợp lệ sang `knowledge/edges.quarantine.jsonl` (giữ nguyên nội dung cạnh + `reason` + `quarantined_at`), ghi lại `edges.jsonl` atomic, sau đó `kg.py validate` phải VALID. Lệnh idempotent: chạy lại khi không còn cạnh sai thì không sửa gì. Cạnh hợp lệ không bị đụng; không tự sửa/xoá thực thể.
+
+### Đọc nghiêm (strict) để không che mất bản ghi
+`statefile.read_jsonl(path, strict=True)` chỉ cho phép **dòng cuối** bị ghi dở; dòng hỏng/trống ở **giữa file** → `StateCorrupt`. `kg.py` (`read_entities`/`read_edges`) và `notebook.py` (`journal.jsonl`) dùng strict; mặc định `strict=False` giữ tương thích cũ. `statefile.update_json` coi file đã tồn tại mà RỖNG là `StateCorrupt` (chỉ file không tồn tại mới dùng default).
 
 ### Khi nào Ghi (Write Rules)
 - **Tự động qua `notebook.py log`**:
@@ -153,6 +164,10 @@ python scripts/kg.py validate runs/<id>
 
 # Báo cáo (chỉ đọc, KHÔNG tự sửa) cạnh/thực thể sai kiểu hoặc lơ lửng do writer cũ
 python scripts/kg.py report runs/<id>
+
+# Dọn cạnh legacy: dry-run rồi --apply (backup + chuyển sang edges.quarantine.jsonl)
+python scripts/kg.py quarantine runs/<id>
+python scripts/kg.py quarantine runs/<id> --apply
 
 # Xem các nút láng giềng kề
 python scripts/kg.py neighbors runs/<id> decision:norm-break --direction both

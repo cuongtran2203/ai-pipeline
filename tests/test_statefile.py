@@ -147,12 +147,46 @@ class StateFileTest(unittest.TestCase):
         with open(bad, encoding="utf-8") as f:
             self.assertEqual(f.read(), '{"a": 1, ')
 
-    def test_update_json_empty_or_missing_uses_default(self):
+    def test_update_json_missing_file_uses_default(self):
         missing = os.path.join(self.dir, "missing.json")
         self.assertEqual(statefile.update_json(missing, lambda old: old + ["x"], default=[]), ["x"])
+
+    def test_update_json_empty_existing_file_is_corrupt(self):
+        """Contract mới: chỉ file KHÔNG TỒN TẠI mới dùng default; file tồn tại mà rỗng -> StateCorrupt."""
         empty = os.path.join(self.dir, "empty.json")
         open(empty, "w", encoding="utf-8").close()
-        self.assertEqual(statefile.update_json(empty, lambda old: old + [1], default=[]), [1])
+        with self.assertRaises(statefile.StateCorrupt):
+            statefile.update_json(empty, lambda old: [1], default=[])
+        with open(empty, encoding="utf-8") as f:
+            self.assertEqual(f.read(), "")  # giữ nguyên, không ghi đè im lặng
+
+    def test_read_jsonl_strict_allows_only_torn_last_line(self):
+        path = os.path.join(self.dir, "log.jsonl")
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(json.dumps({"a": 1}) + "\n")
+            f.write(json.dumps({"a": 2}) + "\n")
+            f.write('{"a": 3')  # dòng cuối ghi dở, không newline
+        self.assertEqual(statefile.read_jsonl(path, strict=True), [{"a": 1}, {"a": 2}])
+
+    def test_read_jsonl_strict_raises_on_mid_file_corruption(self):
+        path = os.path.join(self.dir, "log.jsonl")
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(json.dumps({"a": 1}) + "\n")
+            f.write('khong-phai-json\n')
+            f.write(json.dumps({"a": 2}) + "\n")
+        # mặc định cũ: bỏ qua dòng hỏng để tương thích
+        self.assertEqual(statefile.read_jsonl(path), [{"a": 1}, {"a": 2}])
+        # strict: không được che mất bản ghi hỏng ở giữa
+        with self.assertRaises(statefile.StateCorrupt):
+            statefile.read_jsonl(path, strict=True)
+
+    def test_read_jsonl_strict_raises_on_corrupt_last_line_with_newline(self):
+        path = os.path.join(self.dir, "log.jsonl")
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(json.dumps({"a": 1}) + "\n")
+            f.write('{bad}\n')  # ghi trọn dòng nhưng vẫn sai -> không phải ghi dở
+        with self.assertRaises(statefile.StateCorrupt):
+            statefile.read_jsonl(path, strict=True)
 
 
 if __name__ == "__main__":

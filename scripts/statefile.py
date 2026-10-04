@@ -7,14 +7,15 @@ bang khoa lien tien trinh + ghi nguyen tu (temp roi os.replace).
 
 API:
     read_json(path, default=None) -> du lieu | default   # chiu BOM UTF-8; thieu file/hong -> default
-    update_json(path, fn, default=None) -> du lieu moi    # khoa + doc-sua-ghi + temp/os.replace; file hong -> StateCorrupt (khong ghi de)
+    update_json(path, fn, default=None) -> du lieu moi    # khoa + doc-sua-ghi + temp/os.replace; file hong/RONG -> StateCorrupt (khong ghi de)
     append_jsonl(path, obj) -> None                        # khoa + 1 lan ghi + flush/fsync
-    read_jsonl(path) -> list                               # bo qua dong cuoi ghi do / dong hong
+    read_jsonl(path, strict=False) -> list                 # bo qua dong cuoi ghi do / dong hong; strict=True -> bao loi dong hong GIUA file
     file_lock(path, timeout=...)                           # context manager khi can giu khoa qua nhieu buoc
 
 Bao dam:
 - Nhieu tien trinh cung ghi khong mat ban ghi, khong ghi de lan nhau.
 - File chinh luon la JSON/JSONL hop le: ghi ra file tam cung thu muc, fsync, roi os.replace.
+- Chi file KHONG TON TAI moi la legacy-missing (dung default); file ton tai ma RONG la corrupt.
 - Khoa do OS quan ly (msvcrt.locking tren Windows, fcntl.flock tren POSIX): tien trinh chet
   giua chung tu nha khoa, khong de lai khoa mo coi. Cho qua timeout -> LockTimeout.
 
@@ -165,14 +166,20 @@ class StateCorrupt(ValueError):
 
 
 def _read_strict(path, default):
-    """Thieu file -> default; hong -> StateCorrupt (giu nguyen file, de nguoi dung kiem tra)."""
+    """Thieu file -> default; file ton tai ma RONG hoac hong -> StateCorrupt (giu nguyen file).
+
+    Chi file KHONG TON TAI moi duoc coi la legacy-missing va dung default. Mot file da ton tai
+    nhung rong thuong la dau hieu write bi cat/hong: ghi de bang `fn(default)` se che mat su co.
+    """
     try:
         with open(path, encoding="utf-8-sig") as f:
             text = f.read()
     except FileNotFoundError:
         return default
     if not text.strip():
-        return default
+        raise StateCorrupt(
+            f"{path} rong (file ton tai nhung khong co JSON); khong ghi de. "
+            "Sua/xoa tay hoac khoi phuc ban sao.")
     try:
         return json.loads(text)
     except ValueError as e:
@@ -181,7 +188,7 @@ def _read_strict(path, default):
 
 def update_json(path, fn, default=None):
     """Khoa + doc-sua-ghi nguyen tu. `fn(du_lieu_cu)` tra du lieu moi; tra ve du lieu moi.
-    File hong (khong parse duoc) -> StateCorrupt, khong bao gio ghi de im lang."""
+    File hong hoac RONG (da ton tai) -> StateCorrupt, khong bao gio ghi de im lang."""
     with file_lock(path):
         updated = fn(_read_strict(path, default))
         _atomic_write(path, updated)
@@ -198,20 +205,36 @@ def append_jsonl(path, obj):
             os.fsync(f.fileno())
 
 
-def read_jsonl(path):
-    """Doc JSONL; bo qua dong trong va dong khong parse duoc (ke ca dong cuoi ghi do)."""
+def read_jsonl(path, strict=False):
+    """Doc JSONL.
+
+    - Mac dinh (strict=False): bo qua dong trong va dong khong parse duoc (ke ca dong cuoi ghi do).
+    - strict=True: chi cho phep DONG CUOI bi ghi do (khong co newline ket thuc). Bat ky dong hong
+      hoac dong trong o GIUA file -> StateCorrupt, de reader audit/KG/journal khong che mat ban ghi.
+    """
     out = []
     try:
-        f = open(path, encoding="utf-8-sig")
+        with open(path, encoding="utf-8-sig", newline="") as f:
+            raw_lines = f.readlines()
     except OSError:
         return out
-    with f:
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                out.append(json.loads(line))
-            except ValueError:
-                continue
+    content_idx = [i for i, ln in enumerate(raw_lines) if ln.strip()]
+    last = content_idx[-1] if content_idx else -1
+    for i, line in enumerate(raw_lines):
+        stripped = line.strip()
+        if not stripped:
+            if strict and i < last:
+                raise StateCorrupt(
+                    f"{path}: dong trong o giua file (dong {i + 1}) - co the do ghi do/chen ngang; khong che mat ban ghi.")
+            continue
+        try:
+            out.append(json.loads(stripped))
+        except ValueError as e:
+            if strict:
+                # Dòng cuối bị cắt dở khi append (không có newline) là trường hợp duy nhất được bỏ qua.
+                if i == last and not line.endswith("\n"):
+                    continue
+                raise StateCorrupt(
+                    f"{path}: dong {i + 1} khong phai JSON hop le ({e}); ban ghi bi hong/mat.") from e
+            continue
     return out

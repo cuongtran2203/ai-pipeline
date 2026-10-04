@@ -39,6 +39,7 @@ import re
 import shutil
 import sys
 import tempfile
+import uuid
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import statefile  # noqa: E402  (transactional JSON/JSONL primitives shared by every writer)
@@ -134,6 +135,11 @@ def edges_path(run_dir):
     return os.path.join(kg_dir(run_dir), "edges.jsonl")
 
 
+def quarantine_path(run_dir):
+    """File append-only chứa các cạnh không hợp lệ bị chuyển khỏi edges.jsonl (kèm lý do + thời điểm)."""
+    return os.path.join(kg_dir(run_dir), "edges.quarantine.jsonl")
+
+
 def norm_ts(t):
     """Normalize timestamps to 'YYYY-MM-DD HH:MM:SS' string for deterministic comparison."""
     if not t:
@@ -171,18 +177,11 @@ def read_entities(run_dir):
     if not os.path.exists(p):
         return {}
     entities = {}
-    with open(p, encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                record = json.loads(line)
-                eid = record.get("id")
-                if eid:
-                    entities[eid] = record
-            except ValueError:
-                pass
+    # strict=True: một dòng hỏng ở GIỮA file phải báo lỗi, không bị bỏ qua im lặng (che mất bản ghi).
+    for record in statefile.read_jsonl(p, strict=True):
+        eid = record.get("id")
+        if eid:
+            entities[eid] = record
     return entities
 
 
@@ -190,17 +189,7 @@ def read_edges(run_dir):
     p = edges_path(run_dir)
     if not os.path.exists(p):
         return []
-    edges = []
-    with open(p, encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                edges.append(json.loads(line))
-            except ValueError:
-                pass
-    return edges
+    return statefile.read_jsonl(p, strict=True)
 
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -437,6 +426,112 @@ def collect_validation(run_dir):
     return entities, edges, errors, warnings
 
 
+def edge_validation_reasons(entities, edge):
+    """Lý do một cạnh không hợp lệ (enum endpoint/temporal/confidence). Rỗng = hợp lệ.
+
+    Dùng cho `quarantine`: xác định ĐÚNG các cạnh cần chuyển khỏi edges.jsonl."""
+    reasons = []
+    src, dst, etype = edge.get("source"), edge.get("target"), edge.get("type")
+    if not src or not dst:
+        return [f"missing source or target ({edge})"]
+    if etype not in EDGE_TYPES:
+        return [f"invalid edge type '{etype}'. Allowed: {EDGE_TYPES}"]
+    reasons.extend(check_edge_endpoints(entities, src, dst, etype))
+    vf, vt = norm_ts(edge.get("valid_from")), norm_ts(edge.get("valid_to"))
+    if vf and vt and vf > vt:
+        reasons.append(f"valid_from ('{vf}') is after valid_to ('{vt}')")
+    conf = edge.get("confidence")
+    if conf is not None and not (0.0 <= float(conf) <= 1.0):
+        reasons.append(f"confidence '{conf}' not in [0.0, 1.0]")
+    return reasons
+
+
+def _write_jsonl_atomic(path, rows):
+    """Ghi lại toàn bộ JSONL bằng file tạm + os.replace (reader không thấy file nửa chừng)."""
+    directory = os.path.dirname(os.path.abspath(path))
+    os.makedirs(directory, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(prefix="." + os.path.basename(path) + ".", suffix=".tmp", dir=directory)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as f:
+            for row in rows:
+                f.write(json.dumps(row, ensure_ascii=False) + "\n")
+            f.flush()
+            os.fsync(f.fileno())
+        statefile._replace_atomic(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
+def _edge_quarantine_key(edge):
+    return (edge.get("source"), edge.get("target"), edge.get("type"), edge.get("recorded_at"),
+            edge.get("valid_from"), edge.get("valid_to"))
+
+
+def quarantine(run_dir, apply=False):
+    """Dry-run (mặc định) hoặc chuyển các cạnh KHÔNG hợp lệ khỏi edges.jsonl sang edges.quarantine.jsonl.
+
+    - Mặc định chỉ báo cáo (không sửa file nào).
+    - `apply=True`: backup entities.jsonl/edges.jsonl với tên ĐỘC NHẤT, append cạnh sai (nguyên nội dung +
+      lý do + thời điểm) vào edges.quarantine.jsonl, rồi ghi lại edges.jsonl atomic. Idempotent: chạy lại
+      khi không còn cạnh sai thì không đổi gì (không backup, không append trùng).
+    Trả về 0 nếu đồ thị còn lại VALID (hoặc dry-run), 1 nếu sau khi dọn vẫn còn lỗi validation.
+    """
+    run_dir = os.path.abspath(run_dir)
+    with _graph_lock(run_dir):
+        entities = read_entities(run_dir)
+        edges = read_edges(run_dir)
+        invalid = [(edge, edge_validation_reasons(entities, edge)) for edge in edges]
+        invalid = [(edge, reasons) for edge, reasons in invalid if reasons]
+        print(f"=== KG Quarantine: {kg_dir(run_dir)} ===")
+        print(f"Tổng cạnh: {len(edges)}; cạnh không hợp lệ: {len(invalid)}")
+        for edge, reasons in invalid:
+            print(f"  [X] {edge.get('source')} --[{edge.get('type')}]--> {edge.get('target')}")
+            for reason in reasons:
+                print(f"      - {reason}")
+        if not invalid:
+            print("Kết quả: không có cạnh không hợp lệ; không sửa gì.")
+            return 0
+        if not apply:
+            print("Kết quả: DRY-RUN (chỉ báo cáo). Chạy lại với --apply để backup + chuyển cạnh sai.")
+            return 0
+
+        ts = dt.datetime.now().strftime("%Y%m%d-%H%M%S")
+        for name in ("entities.jsonl", "edges.jsonl"):
+            src = os.path.join(kg_dir(run_dir), name)
+            if os.path.exists(src):
+                backup = f"{src}.bak-{ts}-{uuid.uuid4().hex[:6]}"
+                shutil.copyfile(src, backup)
+                print(f"  backup: {backup}")
+
+        qp = quarantine_path(run_dir)
+        existing_keys = {_edge_quarantine_key(rec.get("edge", {})) for rec in statefile.read_jsonl(qp)}
+        now = dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        moved = 0
+        for edge, reasons in invalid:
+            if _edge_quarantine_key(edge) in existing_keys:
+                continue
+            statefile.append_jsonl(qp, {"edge": edge, "reason": reasons, "quarantined_at": now})
+            existing_keys.add(_edge_quarantine_key(edge))
+            moved += 1
+        bad_ids = {id(edge) for edge, _ in invalid}
+        remaining = [edge for edge in edges if id(edge) not in bad_ids]
+        _write_jsonl_atomic(edges_path(run_dir), remaining)
+        print(f"  đã chuyển {moved} cạnh sang {qp}; còn {len(remaining)} cạnh trong edges.jsonl.")
+
+    remaining_errors = collect_validation(run_dir)[2]
+    if remaining_errors:
+        print(f"Kết quả: còn {len(remaining_errors)} lỗi validation sau khi dọn:", file=sys.stderr)
+        for err in remaining_errors:
+            print(f"  [X] {err}", file=sys.stderr)
+        return 1
+    print("Kết quả: VALID (không còn cạnh không hợp lệ).")
+    return 0
+
+
 def cmd_init(a):
     d = kg_dir(a.run_dir)
     os.makedirs(d, exist_ok=True)
@@ -495,6 +590,10 @@ def cmd_validate(a):
             print(f"  [X] {err}", file=sys.stderr)
         sys.exit(1)
     print("\nResult: VALID (enum, endpoints, temporal order, confidence passed).")
+
+
+def cmd_quarantine(a):
+    sys.exit(quarantine(a.run_dir, apply=a.apply))
 
 
 def cmd_report(a):
@@ -1251,6 +1350,13 @@ def main():
     p_rep = sp.add_parser("report", help="Báo cáo (không tự sửa) cạnh/thực thể sai kiểu hoặc lơ lửng")
     p_rep.add_argument("run_dir")
 
+    # quarantine (dry-run mặc định; --apply backup rồi chuyển cạnh sai sang edges.quarantine.jsonl)
+    p_q = sp.add_parser("quarantine",
+                        help="Dry-run/--apply: chuyển CHỈ cạnh không hợp lệ sang edges.quarantine.jsonl (có backup)")
+    p_q.add_argument("run_dir")
+    p_q.add_argument("--apply", action="store_true",
+                     help="thực sự backup entities/edges rồi chuyển cạnh sai (mặc định chỉ báo cáo)")
+
     # neighbors
     p_nb = sp.add_parser("neighbors", help="List neighbors of a node")
     p_nb.add_argument("run_dir")
@@ -1292,6 +1398,7 @@ def main():
         "add-edge": cmd_add_edge,
         "validate": cmd_validate,
         "report": cmd_report,
+        "quarantine": cmd_quarantine,
         "neighbors": cmd_neighbors,
         "path": cmd_path,
         "explain": cmd_explain,

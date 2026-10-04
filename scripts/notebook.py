@@ -90,20 +90,8 @@ def _read_text(path):
 
 
 def _read_raw_entries(run_dir):
-    p = journal_path(run_dir)
-    if not os.path.exists(p):
-        return []
-    out = []
-    with open(p, encoding="utf-8-sig") as f:
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                out.append(json.loads(line))
-            except ValueError:
-                pass
-    return out
+    # strict=True: dòng hỏng ở GIỮA journal (do ghi dở/chen ngang) phải báo lỗi, không bỏ qua im lặng.
+    return statefile.read_jsonl(journal_path(run_dir), strict=True)
 
 
 def ensure_journal_ids(run_dir):
@@ -160,21 +148,22 @@ def fmt_entry(e):
 
 def rebuild(run_dir):
     d = nb_dir(run_dir)
-    es = ensure_journal_ids(run_dir)
-    meta = {}
-    try:
-        with open(os.path.join(d, "notebooklm.json"), encoding="utf-8-sig") as f:
-            meta = json.load(f)
-    except (OSError, ValueError):
-        pass
-    title = meta.get("title", os.path.basename(os.path.abspath(run_dir)))
-    journal_md = (f"# Sổ thí nghiệm: {title}\n\nTheo thứ tự thời gian. Nguồn gốc: `journal.jsonl`.\n\n"
-                  + "\n".join(fmt_entry(e) for e in es))
-    keep = [e for e in es if e["type"] in ("insight", "decision")]
-    insights_md = (f"# Đúc kết & quyết định: {title}\n\n"
-                   + ("\n".join(fmt_entry(e) for e in keep) if keep else "_Chưa có._\n"))
-    # Rebuild from the snapshot under the render lock so two workers never interleave a partial md.
+    # Chụp snapshot journal BÊN TRONG render lock: một rebuild cũ không thể ghi đè rebuild mới,
+    # vì rebuild sau chỉ đọc journal sau khi rebuild trước đã nhả khóa. journal.md luôn đủ mục.
     with statefile.file_lock(_render_guard(run_dir)):
+        es = ensure_journal_ids(run_dir)
+        meta = {}
+        try:
+            with open(os.path.join(d, "notebooklm.json"), encoding="utf-8-sig") as f:
+                meta = json.load(f)
+        except (OSError, ValueError):
+            pass
+        title = meta.get("title", os.path.basename(os.path.abspath(run_dir)))
+        journal_md = (f"# Sổ thí nghiệm: {title}\n\nTheo thứ tự thời gian. Nguồn gốc: `journal.jsonl`.\n\n"
+                      + "\n".join(fmt_entry(e) for e in es))
+        keep = [e for e in es if e["type"] in ("insight", "decision")]
+        insights_md = (f"# Đúc kết & quyết định: {title}\n\n"
+                       + ("\n".join(fmt_entry(e) for e in keep) if keep else "_Chưa có._\n"))
         _atomic_write_text(os.path.join(d, "journal.md"), journal_md)
         _atomic_write_text(os.path.join(d, "insights.md"), insights_md)
 
@@ -315,7 +304,7 @@ def cmd_reconcile(a):
         print("no pending KG sync")
         return 0
     entries = {e.get("id"): e for e in ensure_journal_ids(a.run_dir)}
-    failed = {}
+    failed, succeeded = {}, {}
     for eid, rec in pending.items():
         e = entries.get(eid)
         if e is None:
@@ -328,9 +317,22 @@ def cmd_reconcile(a):
             failed[eid] = {"error": str(ex), "ts": _now()}
             print(f"  still pending: {eid} ({ex})", file=sys.stderr)
         else:
+            succeeded[eid] = rec
             print(f"  reconciled: {eid}")
-    statefile.update_json(_sync_pending_path(a.run_dir), lambda data: failed, default={})
-    print(f"reconcile: {len(pending) - len(failed)} ok, {len(failed)} còn pending")
+
+    def fn(data):
+        data = data if isinstance(data, dict) else {}
+        # Chỉ xoá key đã sync thành công khi giá trị hiện tại VẪN khớp giá trị đã đọc;
+        # key do writer khác thêm/đổi trong lúc sync được giữ nguyên (không xoá công việc mới).
+        for eid, rec in succeeded.items():
+            if data.get(eid) == rec:
+                data.pop(eid, None)
+        for eid, rec in failed.items():
+            data[eid] = rec
+        return data
+
+    statefile.update_json(_sync_pending_path(a.run_dir), fn, default={})
+    print(f"reconcile: {len(succeeded)} ok, {len(failed)} còn pending")
     return 1 if failed else 0
 
 

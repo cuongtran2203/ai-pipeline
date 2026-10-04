@@ -23,6 +23,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import unittest
 
@@ -35,6 +36,7 @@ if SCRIPTS not in sys.path:
 import kg  # noqa: E402
 import notebook  # noqa: E402
 import settle_task  # noqa: E402
+import statefile  # noqa: E402
 
 # --- multiprocessing worker functions (module level so Windows spawn can pickle them) ---
 
@@ -249,6 +251,48 @@ class SettleTaskTransactionalTests(TempRun):
         self.assertNotEqual(r.returncode, 0)
         with open(os.path.join(self.run, "done.json"), encoding="utf-8") as f:
             self.assertEqual(json.load(f), {"T1": True})
+
+
+class PendingReconcileRaceTests(TempRun):
+    def test_settle_reconcile_keeps_pending_added_during_sync(self):
+        """Reconcile chỉ xoá key đã xử lý; key writer khác thêm trong lúc sync phải giữ (lỗi RV4)."""
+        write_plan(self.run, [{"id": "T1", "kind": "worker", "title": "Task One"}])
+        pending_path = os.path.join(kg.kg_dir(self.run), "sync_pending.json")
+        statefile.update_json(pending_path, lambda d: {"T1": {"error": "cũ", "ts": "old"}}, default={})
+
+        sync_entered = threading.Event()
+        release = threading.Event()
+        original = settle_task.sync_kg_task
+
+        def fake_sync(run_dir, plan_id):
+            sync_entered.set()
+            self.assertTrue(release.wait(10), "writer không kịp thêm pending")
+
+        settle_task.sync_kg_task = fake_sync
+        result = {}
+
+        def do_reconcile():
+            result["rc"] = settle_task.reconcile(self.run)
+
+        t = threading.Thread(target=do_reconcile)
+        try:
+            t.start()
+            self.assertTrue(sync_entered.wait(10), "reconcile không bắt đầu sync")
+            # Writer khác thêm task pending MỚI ngay giữa lúc reconcile đang sync.
+            statefile.update_json(
+                pending_path,
+                lambda d: {**(d or {}), "new-task": {"error": "mới", "ts": "now"}},
+                default={})
+            release.set()
+            t.join(20)
+        finally:
+            release.set()
+            settle_task.sync_kg_task = original
+
+        self.assertEqual(result.get("rc"), 0)
+        data = read_json_file(pending_path)
+        self.assertNotIn("T1", data, "key đã sync xong phải được xoá")
+        self.assertIn("new-task", data, "key thêm trong lúc sync bị xoá mất (lỗi RV4)")
 
 
 class NotebookConcurrencyTests(TempRun):
