@@ -1,0 +1,207 @@
+{
+  "run_id": "sample-ocr",
+  "title": "OCR phiếu chấm công",
+  "objective": "Xây pipeline OCR phiếu chấm công đạt >=95% field-level (sample)",
+  "spec": "examples/sample_spec.md",
+  "tasks": [
+    {
+      "id": "G1",
+      "kind": "gate",
+      "title": "Làm rõ spec: nền tảng, I/O, dataset"
+    },
+    {
+      "id": "A1",
+      "title": "Phân tích dataset real + kế hoạch sinh data",
+      "role": "data-analyst",
+      "agent": "claude",
+      "deps": [
+        "G1"
+      ],
+      "change": "Phân tích 60 trang real, đề xuất kế hoạch gán nhãn eval (>=50 mẫu) và tool sinh synth.",
+      "acceptance": "artifacts/A1/data_analysis.md có thống kê, rủi ro lệch phân bố và kế hoạch sinh data."
+    },
+    {
+      "id": "A2",
+      "title": "Phân tích yêu cầu & chỉ tiêu",
+      "role": "requirements-analyst",
+      "agent": "codex",
+      "deps": [
+        "G1"
+      ],
+      "change": "Làm rõ I/O, ràng buộc tốc độ/chi phí, định nghĩa metric field-level.",
+      "acceptance": "artifacts/A2/requirements.md liệt kê metric, ngưỡng và giả định."
+    },
+    {
+      "id": "A3",
+      "title": "Research SOTA + dataset public",
+      "role": "researcher",
+      "agent": "claude",
+      "deps": [
+        "G1"
+      ],
+      "change": "Tìm giải pháp/bài toán tương tự, dataset public, repo open-source.",
+      "acceptance": "artifacts/A3/research.md với nguồn và đánh giá khả thi."
+    },
+    {
+      "id": "F0",
+      "title": "Ước lượng ceiling C0 (nhiễu nhãn, prior art, sai số chuẩn)",
+      "role": "feasibility-analyst",
+      "agent": "codex",
+      "deps": [
+        "A1",
+        "A2",
+        "A3"
+      ],
+      "change": "Theo skills/ai-pipeline-feasibility mốc C0: sàn lỗi từ kiểm nhãn lần hai, prior art, SE bộ đánh giá; xuất ceiling.json và feasibility.md.",
+      "outputs": [
+        "runs/sample-ocr/ceiling.json",
+        "runs/sample-ocr/feasibility.md"
+      ],
+      "owns": [
+        "runs/sample-ocr/ceiling.json",
+        "runs/sample-ocr/feasibility.md"
+      ],
+      "acceptance": "ceiling.json có estimates[C0] dạng khoảng + basis, decision đề xuất."
+    },
+    {
+      "id": "P1",
+      "title": "Đề xuất model A (accuracy-first)",
+      "role": "model-proposer",
+      "agent": "claude",
+      "deps": [
+        "A1",
+        "A2",
+        "A3",
+        "F0"
+      ],
+      "change": "Đề xuất lựa chọn model/pipeline ưu tiên độ chính xác.",
+      "acceptance": "artifacts/P1/proposal.md có phương án, chi phí, rủi ro."
+    },
+    {
+      "id": "P2",
+      "title": "Đề xuất model B (speed/cost-first)",
+      "role": "model-proposer",
+      "agent": "codex",
+      "deps": [
+        "A1",
+        "A2",
+        "A3",
+        "F0"
+      ],
+      "change": "Đề xuất lựa chọn ưu tiên tốc độ/chi phí, gồm thuật toán truyền thống nếu hợp lý.",
+      "acceptance": "artifacts/P2/proposal.md có phương án, chi phí, rủi ro."
+    },
+    {
+      "id": "P3",
+      "title": "Phản biện hai đề xuất",
+      "role": "critic",
+      "agent": "claude",
+      "deps": [
+        "P1",
+        "P2"
+      ],
+      "change": "Chỉ ra điểm yếu từng đề xuất, đặt câu hỏi kiểm chứng.",
+      "acceptance": "artifacts/P3/critique.md"
+    },
+    {
+      "id": "P4",
+      "title": "Chốt model + kiến trúc pipeline + DAG",
+      "role": "architect",
+      "agent": "claude",
+      "model": "claude-opus-5-5",
+      "deps": [
+        "P3"
+      ],
+      "change": "Judge thống nhất lựa chọn; viết architecture.md và plan.json cho phase build.",
+      "acceptance": "artifacts/P4/architecture.md và artifacts/P4/plan.json hợp lệ với schemas/plan.schema.json."
+    },
+    {
+      "id": "G2",
+      "kind": "gate",
+      "title": "Duyệt plan + chọn phương thức triển khai",
+      "deps": [
+        "P4"
+      ]
+    },
+    {
+      "id": "G3",
+      "kind": "gate",
+      "title": "Cung cấp GPU server / CUDA / framework để train",
+      "deps": [
+        "G2"
+      ]
+    },
+    {
+      "id": "B0",
+      "title": "Baseline probe C1: learning curve + capacity probe",
+      "role": "feasibility-analyst",
+      "agent": "claude",
+      "phase": "probe",
+      "deps": [
+        "G3"
+      ],
+      "owns": [
+        "runs/sample-ocr/modules/probe/"
+      ],
+      "change": "Theo skills/ai-pipeline-feasibility mốc C1: model rất nhỏ, learning curve 10/25/50/100% (>=2 seed), capacity probe, cập nhật ceiling.json.",
+      "acceptance": "ceiling.json có estimates[C1] và chẩn đoán data- vs capacity-limited."
+    },
+    {
+      "id": "M1",
+      "title": "Module layout-detect",
+      "role": "module-dev",
+      "agent": "codex",
+      "phase": "train",
+      "deps": [
+        "G3",
+        "B0"
+      ],
+      "owns": [
+        "runs/sample-ocr/modules/layout/"
+      ],
+      "change": "Version dataset, train, eval module layout theo skills/ai-pipeline-module-dev.",
+      "acceptance": "report.md + report.html + eval.json trong modules/layout/, metric nêu rõ trên val real."
+    },
+    {
+      "id": "M2",
+      "title": "Module REC",
+      "role": "module-dev",
+      "agent": "claude",
+      "phase": "train",
+      "deps": [
+        "G3",
+        "B0"
+      ],
+      "owns": [
+        "runs/sample-ocr/modules/rec/"
+      ],
+      "change": "Như M1 cho module nhận dạng ký tự.",
+      "acceptance": "report.md + report.html + eval.json trong modules/rec/."
+    },
+    {
+      "id": "I1",
+      "title": "Ghép pipeline + test end-to-end",
+      "role": "integrator",
+      "agent": "claude",
+      "phase": "build",
+      "deps": [
+        "M1",
+        "M2"
+      ],
+      "change": "Ghép module, tiền/hậu xử lý, chạy e2e trên val real.",
+      "acceptance": "e2e eval.json theo field."
+    },
+    {
+      "id": "I2",
+      "title": "Phân cụm lỗi e2e",
+      "role": "error-analyst",
+      "agent": "codex",
+      "phase": "build",
+      "deps": [
+        "I1"
+      ],
+      "change": "Phân cụm lỗi, xác nhận nguyên nhân, xuất eval.json + report.",
+      "acceptance": "report.md (3 phần tiếng Việt) và report.html phân cụm lỗi."
+    }
+  ]
+}

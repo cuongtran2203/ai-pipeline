@@ -1,0 +1,210 @@
+{
+  "title": "Ví dụ (OCR phiếu chấm công) — playbook xử lý thành phần yếu",
+  "flow": [
+    [
+      "image",
+      "pre"
+    ],
+    [
+      "pre",
+      "layout"
+    ],
+    [
+      "layout",
+      "rec_print"
+    ],
+    [
+      "layout",
+      "rec_date"
+    ],
+    [
+      "layout",
+      "rec_time"
+    ],
+    [
+      "layout",
+      "rec_code"
+    ],
+    [
+      "rec_print",
+      "post"
+    ],
+    [
+      "rec_date",
+      "post"
+    ],
+    [
+      "rec_time",
+      "post"
+    ],
+    [
+      "rec_code",
+      "post"
+    ],
+    [
+      "post",
+      "api"
+    ]
+  ],
+  "components": [
+    {
+      "id": "pre",
+      "name": "Tiền xử lý M0 (khử nghiêng, chuẩn hóa)",
+      "metric": "không làm giảm EM; ≤10 s/trang CPU",
+      "risk": "low",
+      "why": "Chưa có bằng chứng M0 giúp ích (ablation chưa thấy lợi ích).",
+      "checks": [
+        "ablation có/không M0 trên val"
+      ],
+      "on_weak": {
+        "DATA": "Thêm trang bị nghiêng/phone vào val để đo",
+        "MODEL": "Thay bước khử nghiêng bằng ước lượng góc tốt hơn",
+        "NOISE": "Không áp dụng",
+        "STRUCTURE": "Thêm bước hiệu chỉnh phối cảnh",
+        "OBJECTIVE": "Chỉnh metric/chuẩn hóa/ngưỡng cùng người dùng"
+      },
+      "cost_cap": "1 task"
+    },
+    {
+      "id": "layout",
+      "name": "Layout PicoDet-S (dòng/ô)",
+      "metric": "dòng đủ ô 84/84 val; mAP 0.792",
+      "risk": "low",
+      "why": "14 profile (merged_cell, tilde_overlap…) trên val chỉ 14 trang.",
+      "checks": [
+        "recall theo profile/degrade",
+        "learning curve số trang"
+      ],
+      "on_weak": {
+        "DATA": "Xin thêm trang thật/profile hiếm (synth mosaic không dùng)",
+        "MODEL": "Tăng độ phân giải đầu vào / stride nhỏ cho ô nhỏ (time_range)",
+        "NOISE": "Kiểm box nhãn lệch",
+        "STRUCTURE": "Thêm refine theo đường kẻ bảng",
+        "OBJECTIVE": "Chỉnh metric/chuẩn hóa/ngưỡng cùng người dùng"
+      },
+      "cost_cap": "2 task, ≤1 GPU-day"
+    },
+    {
+      "id": "rec_print",
+      "name": "Rec chữ in (company, staff)",
+      "metric": "EM val 84/84 = 100%",
+      "risk": "low",
+      "why": "Val bão hòa 14 trang; test có ký tự/tên chưa thấy.",
+      "checks": [
+        "OOF X1 theo trang",
+        "ký tự ngoài tập train"
+      ],
+      "on_weak": {
+        "DATA": "Mở rộng từ vựng bằng font in (chỉ khi OOF lỗi do ký tự lạ)",
+        "MODEL": "Dùng rec model lớn hơn cho kanji hiếm",
+        "NOISE": "Chuẩn hóa NFKC",
+        "STRUCTURE": "Hậu xử lý khoảng trắng/ー-一 theo luật train fold",
+        "OBJECTIVE": "Chỉnh metric/chuẩn hóa/ngưỡng cùng người dùng"
+      },
+      "cost_cap": "2 task"
+    },
+    {
+      "id": "rec_date",
+      "name": "Rec ngày (lưới 6 ô)",
+      "metric": "EM val 93.8% (mục tiêu 99%)",
+      "risk": "high",
+      "why": "Lưới 6 ô, crop nguyên ô có ô thừa/dấu phân cách; chữ số viết tay dính khung.",
+      "checks": [
+        "oracle: crop từng ô bằng nhãn rồi đọc từng ô",
+        "lỗi theo vị trí ô",
+        "đọc mù ô ngày"
+      ],
+      "aux": [
+        "bộ tách ô (cell segmenter) + phân loại chữ số từng ô (slot-CNN)"
+      ],
+      "on_weak": {
+        "DATA": "Xin dữ liệu thật/gốc (raw100 hoặc mã bộ sinh). Synth ghép ĐÃ bị bác bỏ ở D2, không lặp",
+        "MODEL": "Tăng chiều cao ảnh vào rec / đổi stride cho chữ số nhỏ",
+        "NOISE": "Rà lại nhãn ô mơ hồ, hạ mục tiêu field",
+        "STRUCTURE": "Thêm module tách ô + phân loại chữ số từng ô nếu oracle tăng rõ",
+        "OBJECTIVE": "Chỉnh metric/chuẩn hóa/ngưỡng cùng người dùng"
+      },
+      "cost_cap": "≤3 task, ≤1.5 GPU-day, GPU ≤6.9GB"
+    },
+    {
+      "id": "rec_time",
+      "name": "Rec giờ bắt đầu/kết thúc",
+      "metric": "EM val 90.9% / 94.2% (mục tiêu 99%)",
+      "risk": "high",
+      "why": "Ô giờ dính nhau qua dấu ~ (tilde_overlap), chữ viết tay mơ hồ (12:26 vs 12:36); người đọc mù bất đồng 18.7%.",
+      "checks": [
+        "oracle: tách start/end bằng box nhãn",
+        "lỗi theo profile tilde_*/merged_*",
+        "đọc mù ô giờ"
+      ],
+      "aux": [
+        "bộ tách start/end tại dấu ~",
+        "bộ nhận diện dấu hai chấm/ranh giới giờ-phút"
+      ],
+      "on_weak": {
+        "DATA": "Xin dữ liệu thật; synth ghép đã bác bỏ",
+        "MODEL": "Tăng độ phân giải crop, rec model lớn hơn",
+        "NOISE": "Nếu nhãn mơ hồ chiếm phần lớn lỗi: hạ mục tiêu start/end và báo CI",
+        "STRUCTURE": "Thêm module tách start/end + đọc giờ/phút riêng",
+        "OBJECTIVE": "Chỉnh metric/chuẩn hóa/ngưỡng cùng người dùng"
+      },
+      "cost_cap": "≤3 task, ≤1.5 GPU-day, GPU ≤6.9GB"
+    },
+    {
+      "id": "rec_code",
+      "name": "Rec work_code + break_time",
+      "metric": "work_code 98.6%, break 100% (val)",
+      "risk": "med",
+      "why": "Mã 5 chữ số viết tay; break nhãn ngẫu nhiên 1h/60/1:00 (đã chuẩn hóa theo phút).",
+      "checks": [
+        "OOF X1",
+        "lỗi theo degrade phone"
+      ],
+      "on_weak": {
+        "DATA": "Xin dữ liệu thật",
+        "MODEL": "Tăng độ phân giải/ensemble nhẹ",
+        "NOISE": "Rà nhãn mã mơ hồ",
+        "STRUCTURE": "Tách chữ số mã + phân loại từng chữ số",
+        "OBJECTIVE": "Chỉnh metric/chuẩn hóa/ngưỡng cùng người dùng"
+      },
+      "cost_cap": "2 task"
+    },
+    {
+      "id": "post",
+      "name": "Hậu xử lý norm-v1 + ràng buộc mềm",
+      "metric": "scorer eval-v1 khớp A2",
+      "risk": "low",
+      "why": "Ràng buộc từ prior bộ sinh có thể làm số lạc quan.",
+      "checks": [
+        "ablation có/không ràng buộc"
+      ],
+      "on_weak": {
+        "DATA": "Không áp dụng",
+        "MODEL": "Không áp dụng",
+        "NOISE": "Báo cáo chênh lệch ablation",
+        "STRUCTURE": "Thêm lexicon/regex theo field",
+        "OBJECTIVE": "Chỉnh metric/chuẩn hóa/ngưỡng cùng người dùng"
+      },
+      "cost_cap": "1 task"
+    },
+    {
+      "id": "api",
+      "name": "API: LitServe + FastAPI KIE",
+      "metric": "latency ≤10 s/trang (container --cpus 8)",
+      "risk": "low",
+      "why": "Latency đo trên CPU server khác máy khách.",
+      "checks": [
+        "đo p95 trong container",
+        "parity ONNX"
+      ],
+      "on_weak": {
+        "DATA": "Không áp dụng",
+        "MODEL": "INT8/OpenVINO nếu vượt latency",
+        "NOISE": "Không áp dụng",
+        "STRUCTURE": "Batch/cache layout",
+        "OBJECTIVE": "Chỉnh metric/chuẩn hóa/ngưỡng cùng người dùng"
+      },
+      "cost_cap": "1 task"
+    }
+  ]
+}

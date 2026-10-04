@@ -1,0 +1,15 @@
+runs/
+__pycache__/
+*.pyc
+.commandcode/
+.opencode/
+100-sync-hw-v1/
+graphify-out/
+.venv-graphify/
+vault/
+.playwright-mcp/
+build/
+dist/
+*.egg-info/
+ai_pipeline/payload/
+.venv/

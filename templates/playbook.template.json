@@ -1,0 +1,25 @@
+{
+  "title": "<project> — luồng xử lý khi thành phần yếu",
+  "flow": [
+    ["data", "preprocess"], ["preprocess", "model_a"], ["model_a", "model_b"], ["model_b", "postprocess"], ["postprocess", "serving"]
+  ],
+  "components": [
+    {
+      "id": "model_a",
+      "name": "<tên thành phần, ví dụ: detector / retriever / classifier / ASR / forecaster>",
+      "metric": "<metric + mục tiêu, ví dụ: mAP@0.5 >= 0.90>",
+      "risk": "low | med | high",
+      "why": "<vì sao thành phần này có thể yếu: đối tượng nhỏ, dữ liệu ít, cấu trúc phức hợp, nhãn mơ hồ, metric chưa rõ…>",
+      "checks": ["learning curve", "metric theo lát cắt (lớp/nguồn/độ khó/độ dài)", "oracle: thay bước thượng nguồn bằng ground truth", "overfit tập con nhỏ", "đọc/gán nhãn mù lại 100-200 mẫu"],
+      "aux": ["<module phụ ứng viên nếu STRUCTURE: bộ tách/phân đoạn, localiser, re-ranker, normaliser…>"],
+      "on_weak": {
+        "DATA": "<xin dữ liệu thật / thu thập lát cắt yếu / làm sạch nhãn; synth chỉ khi ablation cho thấy khớp>",
+        "MODEL": "<độ phân giải/ngữ cảnh/stride/backbone/recipe: 1 thay đổi mỗi vòng>",
+        "STRUCTURE": "<thêm module phụ mà oracle chứng minh: giao diện, thư mục sở hữu, acceptance>",
+        "OBJECTIVE": "<chỉnh metric/ngưỡng/chuẩn hóa/spec cùng người dùng>",
+        "NOISE": "<hạ mục tiêu / chấp nhận khoảng cách / báo CI>"
+      },
+      "cost_cap": "<ví dụ: <=3 task, <=1.5 GPU-day>"
+    }
+  ]
+}

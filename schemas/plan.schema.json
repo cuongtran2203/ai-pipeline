@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "AI pipeline task DAG (plan.json)",
+  "description": "Execution mode trung lập modality ở từng task (mode + resources). Không có mode => logic phase cũ (phase train/probe = train). Ngôn ngữ báo cáo: report_lang (mặc định vi).",
+  "type": "object",
+  "required": ["run_id", "title", "tasks"],
+  "properties": {
+    "run_id": {"type": "string"},
+    "title": {"type": "string"},
+    "objective": {"type": "string"},
+    "spec": {"type": "string"},
+    "report_lang": {"type": "string", "enum": ["vi", "en"], "default": "vi",
+      "description": "Ngôn ngữ báo cáo của run (render_report.py đọc eval.lang, fallback về đây rồi về vi)."},
+    "tasks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "title"],
+        "properties": {
+          "id": {"type": "string"},
+          "kind": {"enum": ["worker", "gate"], "default": "worker"},
+          "phase": {"enum": ["train", "build", "probe"], "description": "probe: cheap baseline for ceiling estimate (C1), treated like train; train: needs a dependency path to gate G3 (and G2); build: needs a path to gate G2. Chỉ dùng khi task không có mode; có mode thì mode quyết định."},
+          "mode": {"enum": ["train", "evaluate-only", "retrieve-only", "inference-service", "monitor"], "description": "train: huấn luyện (cần G3); evaluate-only: chỉ đánh giá; retrieve-only: xây index/truy hồi, không train; inference-service: đóng gói/phục vụ; monitor: giám sát drift sau release. G3 bắt buộc khi task needs_g3 (mode=train HOẶC resources.compute=gpu, kể cả evaluate-only trên GPU), không chỉ khi mode=train."},
+          "resources": {"type": "object", "description": "Tài nguyên task cần (G3/sandbox chỉ bật nơi needs_g3).",
+            "properties": {
+              "compute": {"enum": ["cpu", "gpu"], "description": "compute=gpu kéo theo needs_g3=true (cần gate G3), kể cả mode không phải train."},
+              "container": {"type": "string", "description": "Tên/ảnh container sandbox, có version."},
+              "notes": {"type": "string"}
+            }},
+          "title": {"type": "string"},
+          "role": {"type": "string", "description": "file name (no .md) in roles/; nhóm agent tra từ roles/registry.json"},
+          "agent": {"type": "string", "description": "Tên agent trong roster đã duyệt (agents.json); không còn enum cứng claude|codex."},
+          "model": {"type": "string"},
+          "effort": {"type": "string"},
+          "worktree": {"type": "string", "default": "current"},
+          "deps": {"type": "array", "items": {"type": "string"}},
+          "target": {"type": "string"},
+          "change": {"type": "string", "description": "required for kind=worker"},
+          "constraints": {"type": "array", "items": {"type": "string"}},
+          "owns": {"type": "array", "items": {"type": "string"}, "description": "paths this worker may edit"},
+          "inputs": {"type": "array", "items": {"type": "string"}},
+          "outputs": {"type": "array", "items": {"type": "string"}},
+          "acceptance": {"type": "string", "description": "required for kind=worker"}
+        }
+      }
+    }
+  }
+}

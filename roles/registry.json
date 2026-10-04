@@ -1,0 +1,22 @@
+{
+  "$comment": "Registry role/capability: nguồn duy nhất cho ánh xạ role -> nhóm agent (plan_to_orca.py đọc file này, GROUP_OF trong code chỉ là fallback khi thiếu file). Thêm role mới thì khai ở đây, không sửa code.",
+  "groups": {
+    "code": ["module-dev", "integrator", "error-analyst", "feasibility-analyst", "weakness-diagnostician"],
+    "debate": ["model-proposer", "critic", "architect"],
+    "analysis": ["data-analyst", "requirements-analyst", "researcher", "status-assessor"]
+  },
+  "roles": {
+    "module-dev": {"group": "code", "capabilities": ["train", "evaluate", "serve"], "modes": ["train", "evaluate-only", "retrieve-only", "inference-service"]},
+    "integrator": {"group": "code", "capabilities": ["integrate", "evaluate", "serve"], "modes": ["evaluate-only", "inference-service", "monitor"]},
+    "error-analyst": {"group": "code", "capabilities": ["evaluate", "cluster-errors"], "modes": ["evaluate-only", "monitor"]},
+    "feasibility-analyst": {"group": "code", "capabilities": ["estimate-ceiling", "probe"], "modes": ["train", "evaluate-only"]},
+    "weakness-diagnostician": {"group": "code", "capabilities": ["diagnose", "probe"], "modes": ["evaluate-only"]},
+    "model-proposer": {"group": "debate", "capabilities": ["propose"], "modes": []},
+    "critic": {"group": "debate", "capabilities": ["review"], "modes": []},
+    "architect": {"group": "debate", "capabilities": ["decide", "plan"], "modes": []},
+    "data-analyst": {"group": "analysis", "capabilities": ["profile-data", "split-policy"], "modes": []},
+    "requirements-analyst": {"group": "analysis", "capabilities": ["clarify-targets", "eval-contract"], "modes": []},
+    "researcher": {"group": "analysis", "capabilities": ["survey"], "modes": []},
+    "status-assessor": {"group": "analysis", "capabilities": ["assess-status"], "modes": []}
+  }
+}

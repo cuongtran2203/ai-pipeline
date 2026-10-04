@@ -1,0 +1,71 @@
+{
+  "title": "Dự báo nhu cầu SKU — model fcst-gbm v0.2",
+  "version": {"model": "fcst-gbm-v0.2", "dataset": "ds-fcst-v1 (800 SKU × 730 ngày)"},
+  "baseline_name": "seasonal-naive",
+  "eval_contract": {
+    "unit": "SKU-ngày",
+    "split": {"strategy": "rolling-origin", "details": "4 folds, train 18 tháng, eval 14 ngày; date_max(feature) < origin"},
+    "metrics": [
+      {"name": "MASE", "direction": "lower"},
+      {"name": "coverage-90%", "direction": "higher"}
+    ],
+    "slices": ["toàn bộ SKU", "SKU khuyến mãi"],
+    "horizon": "h=1..14, báo cáo h=1/7/14",
+    "scorer": {"kind": "rule", "details": "số bán thực tế chốt sau 7 ngày"},
+    "uncertainty": {"method": "SE theo fold", "level": 0.95},
+    "provenance": {"eval_set_version": "ro-4folds-2024", "labeled_by": "sales feed", "date": "2024-12-01"}
+  },
+  "overview": {
+    "status": "Baseline seasonal-naive: MASE h=7 là 1.00. Issue: sai lớn đợt khuyến mãi và Tết.",
+    "method": "GBM nhẹ + feature lịch/khuyến mãi (as-of), khoảng dự báo bằng quantile.",
+    "result": "MASE h=7 còn 0.81 (đạt ≤ 0.85); coverage-90% đạt 88%; h=14 chưa đạt."
+  },
+  "tables": [
+    {
+      "name": "toàn bộ SKU (4 folds)",
+      "eval_set": "ro-4folds-2024",
+      "split": "rolling-origin",
+      "rows": [
+        {"item": "MASE h=1", "value": 0.62, "unit": "tỷ số", "n": 22400, "prev_value": 0.71},
+        {"item": "MASE h=7", "value": 0.81, "unit": "tỷ số", "n": 22400, "prev_value": 1.0},
+        {"item": "MASE h=14", "value": 0.97, "unit": "tỷ số", "n": 22400, "prev_value": 1.12},
+        {"item": "coverage-90% h=7", "value": 0.88, "n": 22400}
+      ]
+    },
+    {
+      "name": "SKU khuyến mãi",
+      "eval_set": "ro-4folds-2024",
+      "rows": [
+        {"item": "MASE h=7", "value": 1.15, "unit": "tỷ số", "n": 3200, "prev_value": 1.42}
+      ]
+    }
+  ],
+  "errors": [
+    {
+      "cluster": "Đánh thấp đợt giảm giá sốc",
+      "count": 210,
+      "denominator": 3200,
+      "fields": "SKU khuyến mãi",
+      "cause": "Đã xác nhận: feature chỉ biết lịch khuyến mãi, không biết độ sâu giảm giá.",
+      "examples": [{"where": "SKU-447, fold 3", "note": "giảm 50% nhưng forecast như giảm 20%"}]
+    },
+    {
+      "cluster": "Lệch Tết",
+      "count": 96,
+      "denominator": 22400,
+      "fields": "tuần trước Tết",
+      "cause": "Giả thuyết: chỉ 2 cái Tết trong train, chưa đủ học pattern.",
+      "examples": [{"where": "fold 2, h=7..14"}]
+    }
+  ],
+  "conclusion": {
+    "fixes": [
+      {"priority": "P1", "error": "Đánh thấp giảm giá sốc", "fix": "Thêm feature độ sâu giảm giá (as-of ngày duyệt)",
+       "measure": "MASE h=7 SKU khuyến mãi ≤ 0.95"},
+      {"priority": "P2", "error": "Lệch Tết", "fix": "Mở rộng train thêm 1 năm khi có dữ liệu",
+       "measure": "MASE tuần Tết ≤ 1.0"}
+    ],
+    "recommend": "Dùng v0.2 cho ngày thường; tuần khuyến mãi/Tết giữ biên an toàn tồn kho."
+  },
+  "artifacts": [{"label": "eval.json", "path": "examples/forecast-timeseries/eval.json"}]
+}
