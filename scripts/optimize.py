@@ -10,7 +10,8 @@ Commands:
   optimize.py init <run_dir> [--template T]
   optimize.py status <run_dir> [--json]
   optimize.py next <run_dir> [--json] [--apply]
-  optimize.py record <run_dir> --round N
+  optimize.py record <run_dir> --round N [--gpu-hours X]
+  optimize.py reconcile <run_dir>
 
 Dieu kien STOP (du 5):
   1. success   : moi target dat -> task cuoi `I-final` (test khoa mot lan qua seal) roi release.
@@ -118,6 +119,9 @@ def default_policy(run_id=""):
         "error_analysis_split": "val",
         "data_sources": [],
         "approved_sources": [],
+        # Nguong hoi quy: field khac giam qua nguong nay -> bac-bo (OP4).
+        # null = dung epsilon tung field.
+        "max_regression": None,
         "weights": {},
         "targets": {},
         # Nguon metric khai bao (OP3): null = suy doan cu chi khi file don gian
@@ -201,6 +205,18 @@ def validate_policy(pol):
         v = pol.get(key, [])
         if not isinstance(v, list):
             errs.append("%s phai la list" % key)
+        elif key == "approved_sources":
+            # OP4: danh sach ID registry da duyet (so khop CHINH XAC id,
+            # khong phai chuoi con). Moi entry phai la chuoi id khong rong.
+            for s in v:
+                if not isinstance(s, str) or not s.strip():
+                    errs.append("approved_sources phai la list ID registry "
+                                "(chuoi khong rong, so khop chinh xac id)")
+                    break
+    mr = pol.get("max_regression")
+    if mr is not None and (not isinstance(mr, (int, float)) or isinstance(mr, bool) or mr < 0):
+        errs.append("max_regression phai la so >= 0 hoac null "
+                    "(null = dung epsilon tung field)")
     w = pol.get("weights", {})
     if not isinstance(w, dict):
         errs.append("weights phai la object {field: trong_so}")
@@ -264,6 +280,10 @@ def validate_metrics_source(ms):
                     re.compile(v)
                 except re.error as e:
                     errs.append("metrics_source.%s khong hop le (%s)" % (key, e))
+    sv = ms.get("split_value")
+    if sv is not None and (not isinstance(sv, str) or sv.strip().lower() not in ALLOWED_SPLITS):
+        errs.append("metrics_source.split_value phai la 'val' hoac 'oof' "
+                    "(khai bao sai -> tu choi, khong doan)")
     return errs
 
 
@@ -435,6 +455,22 @@ def _resolve_file_metrics(ev, policy, source_kind):
     grouped = {}
     order = []
     skipped_test = []
+    bad_splits = []
+    # OP4 P2 split fail-closed: split khai bao o eval_contract hoac
+    # metrics_source.split_value cung phai la val|oof (khong doan).
+    contract = ev.get("eval_contract") if isinstance(ev.get("eval_contract"), dict) else {}
+    contract_split = str(contract.get("split") or "").strip().lower()
+    if contract_split and contract_split not in ALLOWED_SPLITS:
+        raise OptimizeError(
+            "eval_contract.split='%s' khong phai val|oof: chi lap tren val/OOF, "
+            "tap test khoa chi cham mot lan o I-final qua seal" % contract.get("split"))
+    fb_split = ""
+    if ms and ms.get("split_value"):
+        fb_split = str(ms["split_value"]).strip().lower()
+    elif contract_split:
+        fb_split = contract_split
+    elif str(ev.get("split") or "").strip():
+        fb_split = str(ev.get("split")).strip().lower()
     for t in tables:
         if not isinstance(t, dict):
             continue
@@ -447,10 +483,13 @@ def _resolve_file_metrics(ev, policy, source_kind):
             if ms and ms.get("exclude_regex") and re.search(
                     ms["exclude_regex"], str(raw_item)):
                 continue
-            split = str(row.get("split") or t.get("split") or "").lower()
-            eset = str(row.get("eval_set") or t.get("eval_set") or "").lower()
+            split = str(row.get("split") or t.get("split") or fb_split or "").strip().lower()
+            eset = str(row.get("eval_set") or t.get("eval_set") or "").strip().lower()
             if "test" in split or "test" in eset:
                 skipped_test.append(str(raw_item)[:60])
+                continue
+            if split not in ALLOWED_SPLITS:
+                bad_splits.append("%s (split=%r)" % (str(raw_item)[:60], split))
                 continue
             if source_kind == "declared":
                 key = _extract_field_key(raw_item, ms)
@@ -464,6 +503,13 @@ def _resolve_file_metrics(ev, policy, source_kind):
                 grouped[key] = []
                 order.append(key)
             grouped[key].append((row, t))
+    if bad_splits:
+        raise OptimizeError(
+            "co %d hang thieu split hoac split khong phai val|oof (vd. %s): "
+            "TU CHOI de tranh lap tren test/train. Moi hang can split 'val' hoac 'oof' "
+            "(row.split, table.split, metrics_source.split_value, hoac eval_contract.split); "
+            "hang test bi bo qua, hang train/rong bi tu choi." % (
+                len(bad_splits), "; ".join(bad_splits[:3])))
     out = {}
     warnings = []
     for key in order:
@@ -676,6 +722,8 @@ def read_state(run_dir):
     st.setdefault("pending_round", None)
     st.setdefault("rejected_branches", [])
     st.setdefault("calibration", [])
+    st.setdefault("calibration_negative", [])
+    st.setdefault("kg_pending", [])
     return st
 
 
@@ -1077,18 +1125,105 @@ def diag_task(rnd, field, agent, split):
 
 def _need_external(d, policy):
     txt = json.dumps(d, ensure_ascii=False).lower()
-    known = [str(s).lower() for s in (policy.get("data_sources") or [])]
+    known = [str(s).strip().lower() for s in (policy.get("data_sources") or [])
+             if str(s).strip()]
     return ("research" in txt or "dataset" in txt or "du lieu ngoai" in txt
             or "thu thap" in txt or "collect" in txt or bool(known))
 
 
+def _external_ids(d, policy):
+    """ID dataset ngoai ma diagnosis/policy nhac toi (de doi chieu exact)."""
+    needed = set()
+    for key in ("dataset_ids", "approved_source_ids"):
+        v = (d or {}).get(key)
+        if isinstance(v, str) and v.strip():
+            needed.add(v.strip())
+        elif isinstance(v, list):
+            for x in v:
+                if str(x).strip():
+                    needed.add(str(x).strip())
+    v = (d or {}).get("dataset_id")
+    if isinstance(v, str) and v.strip():
+        needed.add(v.strip())
+    for s in (policy.get("data_sources") or []):
+        if str(s).strip():
+            needed.add(str(s).strip())
+    return sorted(needed)
+
+
 def _source_approved(d, policy):
-    approved = {str(s).lower() for s in (policy.get("approved_sources") or [])}
-    txt = json.dumps(d, ensure_ascii=False).lower()
-    for src in approved:
-        if src and src in txt:
-            return True
-    return not _need_external(d, policy) or not approved and False
+    """OP4: chi SO KHOP CHINH XAC id registry (khong substring).
+
+    approved_sources la danh sach ID registry da duyet tu truoc; tat ca id
+    can dung phai nam trong do. Thieu danh sach hoac thieu id -> False
+    (luon sinh gate duyet nguoi that).
+    """
+    approved = {str(s).strip() for s in (policy.get("approved_sources") or [])
+                if str(s).strip()}
+    if not approved:
+        return False
+    needed = _external_ids(d, policy)
+    if not needed:
+        return False
+    return set(needed) <= approved
+
+
+def datasource_gate_task(rnd, field):
+    """Task kind gate: coordinator hoi NGUOI THAT (ask), khong worker."""
+    tid = _task_id(rnd, field, "datasource-gate")
+    return {
+        "id": tid,
+        "kind": "gate",
+        "title": "R%02d: duyet nguon du lieu ngoai cho '%s' (NGUOI THAT, khong worker)" % (rnd, field),
+        "deps": [],
+        "guidance": (
+            "Coordinator hoi NGUOI THAT qua ask (co che gate G1/G2/G3 cua plan_to_orca): "
+            "chon dataset id + xac nhan giay phep. Sau duyet: researcher "
+            "`python scripts/data_provenance.py register <run_dir> --card <file>` (neu chua), nguoi "
+            "`python scripts/data_provenance.py approve <run_dir> <DATASET_ID> --approver person:<ten>`; "
+            "ghi decisions.md; them '%s' vao done.json. Worker train/aux chi chay sau gate + "
+            "`use-check` thanh cong. GIOI HAN THAT: CLI khong xac thuc danh tinh nguoi duyet "
+            "(chuoi person:<ten> ai cung go duoc); cong nguoi that la co che gate cua coordinator, "
+            "khong phai lenh approve." % tid),
+    }
+
+
+def _use_check_suffix(ids):
+    shown = ", ".join(ids) if ids else "<DATASET_ID_DUOC_DUYET>"
+    return ("; truoc khi train: `python scripts/data_provenance.py use-check <run_dir> %s` "
+            "phai thanh cong (dataset da register+approve, hash khop)" % shown)
+
+
+def _with_use_check(task, ids):
+    """Gan dieu kien use-check vao acceptance/constraints cua task train/aux."""
+    task["acceptance"] = "%s%s" % (task.get("acceptance", ""), _use_check_suffix(ids))
+    cons = list(task.get("constraints") or [])
+    gate_note = "chi train sau khi gate duyet nguon + use-check thanh cong (data_provenance)"
+    if gate_note not in cons:
+        cons.append(gate_note)
+    task["constraints"] = cons
+    return task
+
+
+def research_task(base, rnd, field, comp, pred, gate_id):
+    """Task research: researcher DE XUAT, KHONG tai du lieu."""
+    tid = _task_id(rnd, field, "research")
+    return {**base, "id": tid,
+            "title": "R%02d: research dataset cong khai cho '%s' (de xuat, KHONG tai)" % (rnd, field),
+            "role": "module-dev", "mode": "retrieve-only",
+            "resources": {"compute": "cpu"},
+            "owns": ["runs/<run_id>/artifacts/%s/" % tid],
+            "inputs": ["diagnosis/%s/diagnosis.json" % comp],
+            "outputs": ["runs/<id>/artifacts/%s/nguon.md" % tid],
+            "target": "tim dataset cong khai phu hop '%s'" % field,
+            "change": ("Researcher DE XUAT dataset cong khai phu hop (KHONG tai, KHONG dua du lieu ve, "
+                       "KHONG mang): mo ta nguon + dang ky card qua "
+                       "`python scripts/data_provenance.py register <run_dir> --card <file>` (chi ghi nhan). "
+                       "KIEM TRA LECH PHAN BO bang thi nghiem nho truoc khi tin. "
+                       "CONG DUYET NGUON: chi tai sau khi gate '%s' duoc NGUOI THAT duyet." % gate_id),
+            "acceptance": "nguon.md + card da register (CHUA tai khi chua duyet); predicted_gain=%.4g" % pred,
+            "measure": "nguon duoc nguoi duyet + do lech phan bo tren val",
+            "constraints": ["KHONG tai du lieu khi chua co duyet nguon cua nguoi that"]}
 
 
 def tasks_for_verdict(rnd, field, latest, target, diag, verdict, agent, split, policy, rejected):
@@ -1125,53 +1260,47 @@ def tasks_for_verdict(rnd, field, latest, target, diag, verdict, agent, split, p
     if verdict == "DATA":
         if "research_data" not in allowed and _need_external(diag, policy):
             return None
-        if _need_external(diag, policy):
-            if not _source_approved(diag, policy):
-                tid = _task_id(rnd, field, "research")
-                out.append({**base, "id": tid,
-                            "title": "R%02d: research dataset cong khai cho '%s'" % (rnd, field),
-                            "role": "module-dev", "mode": "retrieve-only",
-                            "resources": {"compute": "cpu"},
-                            "owns": own(tid),
-                            "inputs": ["diagnosis/%s/diagnosis.json" % comp],
-                            "outputs": ["runs/<id>/artifacts/%s/nguon.md" % tid],
-                            "target": "tim dataset cong khai phu hop '%s'" % field,
-                            "change": ("Research dataset cong khai (skill ai-pipeline-research do task khac viet: "
-                                       "chi tham chieu ten). KIEM TRA LECH PHAN BO bang thi nghiem nho truoc khi tin. "
-                                       "CONG DUYET NGUON: chi tai sau khi nguoi duyet tuong nguon."),
-                            "acceptance": "nguon.md co >=1 nguon + kiem chung lech phan bo tren val; predicted_gain=%.4g; chua tai khi chua duyet" % pred,
-                            "measure": "nguon duoc nguoi duyet + do lech phan bo tren val",
-                            "constraints": ["khong tai du lieu khi chua co duyet nguon"]})
+        ext = _need_external(diag, policy)
+        ext_ids = _external_ids(diag, policy) if ext else []
+        if ext and not _source_approved(diag, policy):
+            # OP4: du lieu ngoai -> research (de xuat, KHONG tai) -> GATE nguoi
+            # that (kind gate, co che G1/G2/G3) -> moi build/train. Khong substring.
+            gate = datasource_gate_task(rnd, field)
+            out.append(research_task(base, rnd, field, comp, pred, gate["id"]))
+            out.append(gate)
+            ext_ids = []  # id cu the do nguoi chon o gate -> placeholder use-check
         if "collect_data" in allowed or "relabel" in allowed:
             tid = _task_id(rnd, field, "collect")
-            out.append({**base, "id": tid,
-                        "title": "R%02d: thu thap/gan nhan bo sung '%s' (ask nguoi)" % (rnd, field),
-                        "role": "module-dev", "mode": "evaluate-only",
-                        "resources": {"compute": "cpu"},
-                        "owns": own(tid),
-                        "inputs": ["diagnosis/%s/diagnosis.json" % comp],
-                        "outputs": ["runs/<id>/artifacts/%s/ds-vX.md" % tid],
-                        "target": "bo sung du lieu that lat cat yeu '%s' (co version ds-vX)" % field,
-                        "change": ("Xin du lieu that/lat cat yeu tu nguoi (ask), thu thap + gan version ds-vX; "
-                                   "synth chi khi ablation tren val that cho thay khop."),
-                        "acceptance": "ds-vX co version + ablation tren val that; predicted_gain=%.4g" % pred,
-                        "measure": "so mau that moi co version + delta val",
-                        "constraints": ["du lieu co version; synth phai ablation tren val that"]})
+            t = {**base, "id": tid,
+                 "title": "R%02d: thu thap/gan nhan bo sung '%s' (ask nguoi)" % (rnd, field),
+                 "role": "module-dev", "mode": "evaluate-only",
+                 "resources": {"compute": "cpu"},
+                 "owns": own(tid),
+                 "inputs": ["diagnosis/%s/diagnosis.json" % comp],
+                 "outputs": ["runs/<id>/artifacts/%s/ds-vX.md" % tid],
+                 "target": "bo sung du lieu that lat cat yeu '%s' (co version ds-vX)" % field,
+                 "change": ("Xin du lieu that/lat cat yeu tu nguoi (ask), thu thap + gan version ds-vX; "
+                            "synth chi khi ablation tren val that cho thay khop."),
+                 "acceptance": "ds-vX co version + ablation tren val that; predicted_gain=%.4g" % pred,
+                 "measure": "so mau that moi co version + delta val",
+                 "constraints": ["du lieu co version; synth phai ablation tren val that"]}
+            out.append(_with_use_check(t, ext_ids) if ext else t)
         if "retrain" not in allowed:
             return None
         tid = _task_id(rnd, field, "retrain")
-        out.append({**base, "id": tid,
-                    "title": "R%02d: retrain cai thien '%s' (DATA)" % (rnd, field),
-                    "role": "module-dev", "mode": "train",
-                    "resources": {"compute": "gpu"},
-                    "owns": own(tid, "runs/<run_id>/modules/"),
-                    "inputs": ["diagnosis/%s/diagnosis.json" % comp],
-                    "outputs": ["runs/<id>/artifacts/%s/eval.json" % tid],
-                    "target": "thu hep khoang cach '%s' tren %s" % (field, split),
-                    "change": "Retrain voi du lieu bo sung (1 thay doi/vong); danh gia tren %s." % split,
-                    "acceptance": "delta %s >= %.4g tren %s that; predicted_gain=%.4g" % (field, pred, split, pred),
-                    "measure": "delta metric tren %s that" % split,
-                    "constraints": ["can G3 truoc khi train; chi danh gia tren %s" % split]})
+        t = {**base, "id": tid,
+             "title": "R%02d: retrain cai thien '%s' (DATA)" % (rnd, field),
+             "role": "module-dev", "mode": "train",
+             "resources": {"compute": "gpu"},
+             "owns": own(tid, "runs/<run_id>/modules/"),
+             "inputs": ["diagnosis/%s/diagnosis.json" % comp],
+             "outputs": ["runs/<id>/artifacts/%s/eval.json" % tid],
+             "target": "thu hep khoang cach '%s' tren %s" % (field, split),
+             "change": "Retrain voi du lieu bo sung (1 thay doi/vong); danh gia tren %s." % split,
+             "acceptance": "delta %s >= %.4g tren %s that; predicted_gain=%.4g" % (field, pred, split, pred),
+             "measure": "delta metric tren %s that" % split,
+             "constraints": ["can G3 truoc khi train; chi danh gia tren %s" % split]}
+        out.append(_with_use_check(t, ext_ids) if ext else t)
         return out
 
     if verdict == "MODEL":
@@ -1196,38 +1325,31 @@ def tasks_for_verdict(rnd, field, latest, target, diag, verdict, agent, split, p
     if verdict == "STRUCTURE":
         if "add_module" not in allowed:
             return None
-        if _need_external(diag, policy):
+        ext = _need_external(diag, policy)
+        ext_ids = _external_ids(diag, policy) if ext else []
+        if ext:
             if "research_data" not in allowed:
                 return None
             if not _source_approved(diag, policy):
-                tid = _task_id(rnd, field, "research")
-                out.append({**base, "id": tid,
-                            "title": "R%02d: research dataset cong khai cho module phu '%s'" % (rnd, field),
-                            "role": "module-dev", "mode": "retrieve-only",
-                            "resources": {"compute": "cpu"},
-                            "owns": own(tid),
-                            "inputs": ["diagnosis/%s/diagnosis.json" % comp],
-                            "outputs": ["runs/<id>/artifacts/%s/nguon.md" % tid],
-                            "target": "tim dataset cong khai cho module phu cua '%s'" % field,
-                            "change": ("Research dataset cong khai cho module phu (vd. classifier chu so viet tay). "
-                                       "CONG DUYET NGUON: chi tai sau khi nguoi duyet."),
-                            "acceptance": "nguon.md + duyet nguoi; predicted_gain=%.4g" % pred,
-                            "measure": "nguon duoc duyet",
-                            "constraints": ["khong tai du lieu khi chua co duyet nguon"]})
+                gate = datasource_gate_task(rnd, field)
+                out.append(research_task(base, rnd, field, comp, pred, gate["id"]))
+                out.append(gate)
+                ext_ids = []
         tid = _task_id(rnd, field, "aux")
-        out.append({**base, "id": tid,
-                    "title": "R%02d: build module phu cho '%s'" % (rnd, field),
-                    "role": "module-dev", "mode": "train",
-                    "resources": {"compute": "gpu"},
-                    "owns": own(tid, "runs/<run_id>/modules/%s-aux/" % comp),
-                    "inputs": ["diagnosis/%s/diagnosis.json" % comp],
-                    "outputs": ["runs/<id>/modules/%s-aux/eval.json" % comp],
-                    "target": "module phu (phan loai/localiser/normaliser) cho '%s'" % field,
-                    "change": ("Build module phu ma oracle da chung minh (vd. classifier chu so -> "
-                               "dinh tuyen theo do tin cay voi nguong hieu chinh tren val)."),
-                    "acceptance": "module phu do duoc tren %s + nguong hieu chinh tren val; predicted_gain=%.4g" % (split, pred),
-                    "measure": "delta metric tren %s that" % split,
-                    "constraints": ["can G3 truoc khi train; nguong dinh tuyen hieu chinh tren val"]})
+        t = {**base, "id": tid,
+             "title": "R%02d: build module phu cho '%s'" % (rnd, field),
+             "role": "module-dev", "mode": "train",
+             "resources": {"compute": "gpu"},
+             "owns": own(tid, "runs/<run_id>/modules/%s-aux/" % comp),
+             "inputs": ["diagnosis/%s/diagnosis.json" % comp],
+             "outputs": ["runs/<id>/modules/%s-aux/eval.json" % comp],
+             "target": "module phu (phan loai/localiser/normaliser) cho '%s'" % field,
+             "change": ("Build module phu ma oracle da chung minh (vd. classifier chu so -> "
+                        "dinh tuyen theo do tin cay voi nguong hieu chinh tren val)."),
+             "acceptance": "module phu do duoc tren %s + nguong hieu chinh tren val; predicted_gain=%.4g" % (split, pred),
+             "measure": "delta metric tren %s that" % split,
+             "constraints": ["can G3 truoc khi train; nguong dinh tuyen hieu chinh tren val"]}
+        out.append(_with_use_check(t, ext_ids) if ext else t)
         tid2 = _task_id(rnd, field, "integrate")
         out.append({**base, "id": tid2,
                     "title": "R%02d: tich hop + dinh tuyen module phu '%s'" % (rnd, field),
@@ -1284,7 +1406,7 @@ def eval_task(rnd, agent, split):
         "target": "do lai e2e tren %s that + bao cao" % split,
         "change": ("Danh gia e2e tren %s that (KHONG dung test) -> eval.json; "
                    "render report.md + report.html (render_report); "
-                   "chay `python scripts/optimize.py record <run_dir> --round %d`." % (split, rnd)),
+                   "chay `python scripts/optimize.py record <run_dir> --round %d --gpu-hours X`." % (split, rnd)),
         "acceptance": "eval.json + report.md + report.html ton tai; rounds.jsonl co ban ghi round %d; predicted_gain=0.0 (do luong)" % rnd,
         "predicted_gain": 0.0,
         "hypothesis": "do luong vong %d (khong phai gia thuyet cai thien)" % rnd,
@@ -1329,60 +1451,107 @@ def final_task():
     }
 
 
-# --- Apply vao plan.json (idempotent) ---
+# --- Apply vao plan.json (giao dich) ---
+
+def _run_lock_path(run_dir):
+    """Mot khoa theo run cho ca apply + record (statefile.file_lock)."""
+    return os.path.join(optimize_dir(run_dir), "run.lock")
+
+
+def _needs_g3_local(t):
+    """Nguong G3 (giong plan_to_orca.needs_g3, khong import): train hoac gpu."""
+    if t.get("mode") == "train":
+        return True
+    return (t.get("resources") or {}).get("compute") == "gpu"
+
+
+def _ancestors_of(tid, by_id):
+    seen, stack = set(), list((by_id.get(tid) or {}).get("deps", []) or [])
+    while stack:
+        d = stack.pop()
+        if d in seen or d not in by_id:
+            continue
+        seen.add(d)
+        stack.extend((by_id[d] or {}).get("deps", []) or [])
+    return seen
+
 
 def apply_next(run_dir, decision):
-    """Ghi vong vao plan.json. Idempotent: chay 2 lan khong nhan doi.
-    Tu choi neu vong truoc chua `record` (pending_round)."""
-    st = read_state(run_dir)
-    if st.get("pending_round") is not None:
-        raise OptimizeError("vong %s chua `record` (pending_round=%s): chay "
-                            "`python scripts/optimize.py record <run_dir> --round %s` truoc" % (
-                                st["pending_round"], st["pending_round"], st["pending_round"]))
-    plan_p = plan_path(run_dir)
-    try:
-        with open(plan_p, encoding="utf-8-sig") as f:
-            plan = json.load(f)
-    except FileNotFoundError:
-        raise OptimizeError("chua co plan.json (%s)" % plan_p)
-    except ValueError as e:
-        raise OptimizeError("plan.json hong (%s)" % e)
-    if not isinstance(plan, dict) or not isinstance(plan.get("tasks"), list):
-        raise OptimizeError("plan.json phai la object co list 'tasks'")
-    tasks = plan["tasks"]
-    by_id = {t.get("id"): t for t in tasks if isinstance(t, dict)}
-    new_tasks = list(decision.get("tasks") or [])
-    if decision.get("decision") == STOP_SUCCESS:
-        new_tasks = [final_task()]
-        new_tasks[0]["agent"] = _code_agent(_load_agents(run_dir))
-    if not new_tasks:
-        return {"applied": 0, "round": decision.get("round"), "note": "STOP: khong ghi task moi"}
-    gate_deps = [g for g in ("G2", "G3") if g in by_id]
-    added = []
-    for t in new_tasks:
-        if t["id"] in by_id:
-            continue
-        deps = list(t.get("deps") or [])
-        if not deps and gate_deps:
-            need_g3 = t.get("mode") == "train" or (t.get("resources") or {}).get("compute") == "gpu"
-            t["deps"] = (["G2"] if "G2" in gate_deps else []) + (["G3"] if need_g3 and "G3" in gate_deps else [])
-        ag = _load_agents(run_dir)
-        if t.get("agent") in (None, "auto") and ag:
-            t["agent"] = _code_agent(ag)
-        tasks.append(t)
-        by_id[t["id"]] = t
-        added.append(t["id"])
+    """Ghi vong vao plan.json DUOI MOT KHOA (giao dich, OP4 P2).
 
-    def fn(_old):
-        return plan
-    statefile.update_json(plan_p, fn, default={})
-    if added:
-        st["pending_round"] = int(decision.get("round", st.get("next_round", 1)))
-        write_state(run_dir, st)
-    return {"applied": len(added), "round": decision.get("round"),
-            "task_ids": added,
-            "note": "idempotent: %d task moi (%d da ton tai duoc giu nguyen)" % (
-                len(added), len(new_tasks) - len(added))}
+    Doc plan + state BEN TRONG khoa, khong dung snapshot ngoai khoa; ghi
+    plan.json va state.json truoc khi nha khoa. Idempotent: chay 2 lan khong
+    nhan doi. Tu choi neu vong truoc chua `record` (pending_round). Task train
+    (/GPU) duoc gan duong phu thuoc toi G3, task build toi G2 de
+    plan_to_orca.py chap nhan (ke ca khi co gate duyet nguon chen giua).
+    """
+    os.makedirs(optimize_dir(run_dir), exist_ok=True)
+    with statefile.file_lock(_run_lock_path(run_dir)):
+        st = read_state(run_dir)
+        pend = st.get("pending_round")
+        if pend is not None:
+            raise OptimizeError("vong %s chua `record` (pending_round=%s): chay `python scripts/optimize.py record <run_dir> --round %s` truoc" % (pend, pend, pend))
+        plan_p = plan_path(run_dir)
+        try:
+            with open(plan_p, encoding="utf-8-sig") as f:
+                plan = json.load(f)
+        except FileNotFoundError:
+            raise OptimizeError("chua co plan.json (%s)" % plan_p)
+        except ValueError as e:
+            raise OptimizeError("plan.json hong (%s)" % e)
+        if not isinstance(plan, dict) or not isinstance(plan.get("tasks"), list):
+            raise OptimizeError("plan.json phai la object co list 'tasks'")
+        tasks = plan["tasks"]
+        by_id = {t.get("id"): t for t in tasks if isinstance(t, dict)}
+        new_tasks = list(decision.get("tasks") or [])
+        if decision.get("decision") == STOP_SUCCESS:
+            new_tasks = [final_task()]
+            new_tasks[0]["agent"] = _code_agent(_load_agents(run_dir))
+        if not new_tasks:
+            return {"applied": 0, "round": decision.get("round"), "note": "STOP: khong ghi task moi"}
+        added = []
+        fresh = []
+        for t in new_tasks:
+            if t["id"] in by_id:
+                continue
+            tasks.append(t)
+            by_id[t["id"]] = t
+            fresh.append(t)
+            added.append(t["id"])
+        for t in fresh:
+            if t.get("kind") == "gate":
+                continue  # gate: coordinator hoi nguoi, khong worker/agent/GPU
+            deps = list(t.get("deps") or [])
+            if "G2" in by_id and "G2" not in _ancestors_of(t["id"], by_id) and "G2" != t["id"]:
+                deps.append("G2")
+            if _needs_g3_local(t) and "G3" in by_id and "G3" not in _ancestors_of(t["id"], by_id):
+                deps.append("G3")
+            t["deps"] = deps
+            ag = _load_agents(run_dir)
+            if t.get("agent") in (None, "auto") and ag:
+                t["agent"] = _code_agent(ag)
+        attitude = {"applied": len(added), "round": decision.get("round"),
+                    "task_ids": added,
+                    "note": "idempotent: %d task moi (%d da ton tai duoc giu nguyen)" % (
+                        len(added), len(new_tasks) - len(added))}
+
+        def fn(_old):
+            return plan
+        statefile.update_json(plan_p, fn, default={})
+        if added:
+            rnd = int(decision.get("round", st.get("next_round", 1)))
+
+            def fs(_old):
+                d = dict(_old) if isinstance(_old, dict) else {}
+                d.setdefault("next_round", 1)
+                d.setdefault("rejected_branches", [])
+                d.setdefault("calibration", [])
+                d.setdefault("calibration_negative", [])
+                d.setdefault("kg_pending", [])
+                d["pending_round"] = rnd
+                return d
+            statefile.update_json(state_path(run_dir), fs, default={})
+        return attitude
 
 
 # --- Record vong ---
@@ -1407,7 +1576,7 @@ def _eval_values(ev, policy=None):
         if kind == "ambiguous":
             return {}
         resolved, _skipped, _warn = _resolve_file_metrics(ev, policy, kind)
-    except (OptimizeError, ValueError):
+    except ValueError:
         return {}
     return {f: {"value": e["value"], "n": e["n"],
                 "direction": e["direction"], "ci_eps": e.get("ci_eps")}
@@ -1437,99 +1606,317 @@ def _predicted_for_round(plan_tasks, rnd):
     return preds
 
 
-def record_round(run_dir, rnd):
-    """Doc eval moi, ghi rounds.jsonl (append-only), cap nhat state, KG, so."""
+# --- Record vong (gain co dau, idempotent, giao dich) ---
+
+def _eval_digest(path):
+    """Digest dinh danh mot vong record: eval.json + report.md + report.html."""
+    h = hashlib.sha256()
+    base = os.path.dirname(path)
+    for name in ("eval.json", "report.md", "report.html"):
+        p = os.path.join(base, name)
+        if os.path.isfile(p):
+            with open(p, "rb") as f:
+                for chunk in iter(lambda: f.read(1 << 20), b""):
+                    h.update(chunk)
+    h.update(b"|")
+    h.update(os.path.basename(base).encode("utf-8"))
+    return h.hexdigest()
+
+
+def _check_bundle(newest, rnd):
+    """Bo artifact bao cao: eval.json + report.md + report.html cung thu muc."""
+    missing = [n for n in ("eval.json", "report.md", "report.html")
+               if not os.path.isfile(os.path.join(newest, n))]
+    if missing:
+        raise OptimizeError(
+            "thieu %s o %s: record vong %d doi hoi bo artifact day du "
+            "(eval.json + report.md + report.html). Render truoc bang "
+            "`python scripts/render_report.py <eval.json> --out-dir <thu muc round>`" % (
+                ", ".join(missing), os.path.basename(newest), rnd))
+    base = os.path.basename(newest)
+    if not base.startswith("round-"):
+        raise OptimizeError("thu muc round '%s' sai ten (phai bat dau bang 'round-')" % base)
+
+
+def _resolve_gpu_hours(policy, newest, cli_val):
+    """So gio GPU THAT cua vong: --gpu-hours, hoac usage.json cua round.
+
+    Khi policy dat cap gpu_hours ma thieu usage -> TU CHOI record (khong doan
+    0.0). usage.json phai la object co gpu_hours la so >= 0 (bool bi loai).
+    """
+    if cli_val is not None:
+        try:
+            v = float(cli_val)
+        except (TypeError, ValueError):
+            raise OptimizeError("gpu-hours '%s' khong phai so" % (cli_val,))
+        if isinstance(cli_val, bool) or v < 0 or v != v:
+            raise OptimizeError("gpu-hours phai la so >= 0 (got %r)" % (cli_val,))
+        return v
+    up = os.path.join(newest, "usage.json")
+    if os.path.isfile(up):
+        try:
+            with open(up, encoding="utf-8-sig") as f:
+                u = json.load(f)
+        except ValueError as e:
+            raise OptimizeError("usage.json hong (%s); sua hoac xoa tay" % e)
+        if not isinstance(u, dict):
+            raise OptimizeError("usage.json phai la object co 'gpu_hours'")
+        v = u.get("gpu_hours")
+        if isinstance(v, bool) or not isinstance(v, (int, float)) or v < 0:
+            raise OptimizeError("usage.json['gpu_hours'] phai la so >= 0 (got %r)" % (v,))
+        return float(v)
+    cap = (policy.get("budget") or {}).get("gpu_hours")
+    if cap is not None:
+        raise OptimizeError(
+            "record thieu usage GPU: policy dat cap gpu_hours=%s nhung khong co so do that. "
+            "Truyen `--gpu-hours X` (so gio GPU that cua vong) hoac viet "
+            "%s voi {\"gpu_hours\": X}; khong doan 0.0." % (
+                cap, os.path.join(os.path.basename(newest), "usage.json")))
+    return 0.0
+
+
+def _apply_rec_to_state(d, rec):
+    """Dua ban ghi round vao state (idempotent: goi lap khong nhan doi)."""
+    rnd = int(rec.get("round"))
+    if not isinstance(d, dict):
+        d = {}
+    d.setdefault("next_round", 1)
+    d.setdefault("pending_round", None)
+    d.setdefault("rejected_branches", [])
+    d.setdefault("calibration", [])
+    d.setdefault("calibration_negative", [])
+    d.setdefault("kg_pending", [])
+    if int(d.get("next_round", 1)) <= rnd:
+        d["next_round"] = rnd + 1
+    if d.get("pending_round") == rnd:
+        d["pending_round"] = None
+    rej = set(d.get("rejected_branches", []) or [])
+    for b in rec.get("rejected_branches", []) or []:
+        rej.add(b)
+    d["rejected_branches"] = sorted(rej)
+    cal = rec.get("calibration")
+    if cal is not None and not any(
+            isinstance(c, dict) and c.get("round") == rnd for c in d["calibration"]):
+        d["calibration"] = (list(d["calibration"]) + [{"round": rnd, "ratio": cal}])[-10:]
+    if (rec.get("predicted_gain") or 0) > 0 and (rec.get("measured_gain") or 0) <= 0:
+        raw = rec.get("calibration_raw")
+        if not any(isinstance(c, dict) and c.get("round") == rnd
+                   for c in d["calibration_negative"]):
+            d["calibration_negative"] = list(d["calibration_negative"]) + [
+                {"round": rnd, "ratio": raw}]
+    return d
+
+
+def _finish_recorded(run_dir, rnd):
+    """Vong da co trong rounds.jsonl: dam bao state phan anh (crash-safe),
+    tra ban ghi + co already_recorded (exit 0, khong ghi them)."""
+    rounds = read_rounds(run_dir)
+    recs = [r for r in rounds if r.get("round") == rnd]
+    if not recs:
+        raise OptimizeError("internal: khong tim thay ban ghi vong %d" % rnd)
+    rec = recs[-1]
+
+    def fn(old):
+        return _apply_rec_to_state(old, rec)
+    statefile.update_json(state_path(run_dir), fn, default={})
+    out = dict(rec)
+    out["already_recorded"] = True
+    return out
+
+
+def reconcile_rounds(run_dir):
+    """Ghi lai phan KG/notebook thieu (state.kg_pending)."""
+    st = read_state(run_dir)
+    pend = list(st.get("kg_pending") or [])
+    if not pend:
+        return {"reconciled": 0, "pending": []}
+    rounds = {r.get("round"): r for r in read_rounds(run_dir) if isinstance(r, dict)}
+    remaining = []
+    done = 0
+    for item in pend:
+        rnd = (item or {}).get("round")
+        rec = rounds.get(rnd)
+        if rec is None:
+            remaining.append(item)
+            continue
+        try:
+            ok1 = _sync_record_kg(run_dir, rnd, rec, {})
+            ok2 = _log_record_notebook(run_dir, rnd, rec)
+            if not (ok1 and ok2):
+                raise RuntimeError("kg/notebook van loi")
+            done += 1
+        except Exception as e:  # noqa: BLE001 - giu lai de reconcile sau
+            item["error"] = str(e)
+            remaining.append(item)
+
+    def fn(old):
+        d = dict(old) if isinstance(old, dict) else {}
+        d["kg_pending"] = remaining
+        return d
+    statefile.update_json(state_path(run_dir), fn, default={})
+    return {"reconciled": done, "pending": remaining}
+
+
+def record_round(run_dir, rnd, gpu_hours=None):
+    """Doc eval moi, ghi rounds.jsonl (append-only), cap nhat state, KG, so.
+
+    OP4 P1:
+    - Gain CO DAU theo huong tot cua metric (higher/lower_is_better); chi
+      verdict `giu` khi gain duong cua field muc tieu >= epsilon (epsilon theo
+      sai so chuan/CI neu co). Suy giam lon (vd. 54/60 -> 48/60) -> `bac-bo`.
+    - Kiem HOI QUY: field khac giam qua epsilon (hoac max_regression) ->
+      `bac-bo` kem ly do + field bi hai.
+    - Hieu chuan measured/predicted chi dung vong gain duong; vong am ghi
+      rieng (calibration_negative), khong bao gio lam tang du doan.
+    - Idempotent + giao dich: DUOI MOT KHOA theo run kiem round chua ghi,
+      digest eval chua co, round khop pending_round, bo artifact day du; lan
+      hai tra already_recorded (exit 0, khong ghi them). Crash giua cac buoc:
+      lan sau tu hoan tat state (digest da co).
+    - GPU that: --gpu-hours hoac usage.json cua round; thieu ma co cap ->
+      tu choi record.
+    """
     status, policy, errs = load_policy(run_dir)
     if status != "ok":
         raise OptimizeError("policy %s: %s" % (status, "; ".join(errs)))
-    dirs = _round_report_dirs(run_dir)
-    if not dirs:
-        raise OptimizeError("chua co reports/round-*/eval.json de record vong %d" % rnd)
-    newest = dirs[-1]
-    ev_path = os.path.join(newest, "eval.json")
-    if not os.path.isfile(ev_path):
-        raise OptimizeError("thieu eval.json o %s" % newest)
-    try:
-        new_ev = _read_eval_file(ev_path)
-    except ValueError as e:
-        raise OptimizeError("eval.json hong (%s)" % e)
-    new_vals = _eval_values(new_ev, policy)
-    if not new_vals:
-        raise OptimizeError("eval.json moi (%s) khong trich duoc metric nao "
-                            "(file mo ho ma thieu metrics_source, hoac rong)" % newest)
-    if len(dirs) >= 2 and os.path.isfile(os.path.join(dirs[-2], "eval.json")):
+    os.makedirs(optimize_dir(run_dir), exist_ok=True)
+    with statefile.file_lock(_run_lock_path(run_dir)):
+        dirs = _round_report_dirs(run_dir)
+        if not dirs:
+            raise OptimizeError("chua co reports/round-*/eval.json de record vong %d" % rnd)
+        newest = dirs[-1]
+        ev_path = os.path.join(newest, "eval.json")
+        if not os.path.isfile(ev_path):
+            raise OptimizeError("thieu eval.json o %s" % newest)
+        _check_bundle(newest, rnd)
+        digest = _eval_digest(ev_path)
+        rounds = read_rounds(run_dir)
+        existing = [r for r in rounds if r.get("round") == rnd]
+        digest_hit = any(r.get("eval_digest") == digest for r in rounds
+                         if isinstance(r, dict))
+        if existing or digest_hit:
+            return _finish_recorded(run_dir, rnd)
+        st = read_state(run_dir)
+        pend = st.get("pending_round")
+        if pend is not None and int(pend) != int(rnd):
+            raise OptimizeError("vong %s chua `record` (pending_round=%s): chay "
+                                "`python scripts/optimize.py record <run_dir> --round %s` truoc; "
+                                "khong record vong khac khi vong truoc chua xong" % (pend, pend, pend))
         try:
-            old_vals = _eval_values(_read_eval_file(os.path.join(dirs[-2], "eval.json")),
-                                    policy)
-        except ValueError:
-            old_vals = {}
-    else:
-        fields, _ = read_field_history(run_dir, policy)
-        old_vals = {f: {"value": h[0]["value"], "n": h[0].get("n"),
-                        "direction": h[0].get("direction", "higher")}
-                    for f, h in fields.items() if len(h) >= 1
-                    and os.path.abspath(h[0].get("eval_file", "")) != os.path.abspath(ev_path)}
-        if not old_vals:
-            old_vals = {}
-    _plan, ptasks = _load_plan_tasks(run_dir)
-    preds = _predicted_for_round(ptasks, rnd)
-    pred_gain = max(preds.values()) if preds else 0.0
-    per_field, gains = {}, []
-    for f, nv in new_vals.items():
-        ov = old_vals.get(f)
-        before = ov["value"] if ov else None
-        direction = nv.get("direction", "higher")
-        mg = _improvement(nv["value"], before, direction) if before is not None else 0.0
-        gains.append(abs(mg))
-        per_field[f] = {"before": before, "after": nv["value"],
-                        "measured_gain": mg, "n": nv.get("n")}
-    max_gain = max(gains) if gains else 0.0
-    eps_ref = 0.0
-    if new_vals:
-        f0 = sorted(new_vals)[0]
-        eps_ref = effective_epsilon(policy, new_vals[f0]["value"],
-                                    new_vals[f0].get("n"),
-                                    new_vals[f0].get("ci_eps"))
-    verdict = "giu" if max_gain >= eps_ref else "bo"
-    rejected = []
-    if verdict == "bo":
-        diags = read_diagnoses(run_dir)
-        for f in per_field:
-            v = norm_verdict((diags.get(f) or {}).get("verdict"))
-            if v:
-                rejected.append("%s:%s" % (f, v))
-    calib = None
-    if pred_gain > 0:
-        calib = max_gain / pred_gain
-    rec = {"round": rnd, "report": os.path.basename(newest),
-           "ts": _now(), "per_field": per_field,
-           "predicted_gain": pred_gain, "measured_gain": max_gain,
-           "max_gain": max_gain, "calibration": calib,
-           "verdict": verdict, "rejected_branches": rejected,
-           "gpu_hours": 0.0}
-    statefile.append_jsonl(rounds_path(run_dir), rec)
-    st = read_state(run_dir)
-    if int(st.get("next_round", 1)) <= rnd:
-        st["next_round"] = rnd + 1
-    if st.get("pending_round") == rnd:
-        st["pending_round"] = None
-    rej = set(st.get("rejected_branches", []) or [])
-    for b in rejected:
-        rej.add(b)
-    st["rejected_branches"] = sorted(rej)
-    if calib is not None:
-        cal = list(st.get("calibration", []) or [])
-        cal.append({"round": rnd, "ratio": calib})
-        st["calibration"] = cal[-10:]
-    write_state(run_dir, st)
-    _sync_record_kg(run_dir, rnd, rec, new_ev)
-    _log_record_notebook(run_dir, rnd, rec)
+            new_ev = _read_eval_file(ev_path)
+        except ValueError as e:
+            raise OptimizeError("eval.json hong (%s)" % e)
+        new_vals = _eval_values(new_ev, policy)
+        if not new_vals:
+            raise OptimizeError("eval.json moi (%s) khong trich duoc metric nao "
+                                "(file mo ho ma thieu metrics_source, hoac rong)" % newest)
+        if len(dirs) >= 2 and os.path.isfile(os.path.join(dirs[-2], "eval.json")):
+            try:
+                old_vals = _eval_values(_read_eval_file(os.path.join(dirs[-2], "eval.json")),
+                                        policy)
+            except ValueError:
+                old_vals = {}
+        else:
+            fields, _ = read_field_history(run_dir, policy)
+            old_vals = {f: {"value": h[0]["value"], "n": h[0].get("n"),
+                            "direction": h[0].get("direction", "higher")}
+                        for f, h in fields.items() if len(h) >= 1
+                        and os.path.abspath(h[0].get("eval_file", "")) != os.path.abspath(ev_path)}
+            if not old_vals:
+                old_vals = {}
+        gpu = _resolve_gpu_hours(policy, newest, gpu_hours)
+        _plan, ptasks = _load_plan_tasks(run_dir)
+        preds = _predicted_for_round(ptasks, rnd)
+        pred_gain = max(preds.values()) if preds else 0.0
+        per_field, gains = {}, {}
+        for f, nv in new_vals.items():
+            ov = old_vals.get(f)
+            before = ov["value"] if ov else None
+            direction = nv.get("direction", "higher")
+            mg = _improvement(nv["value"], before, direction) if before is not None else 0.0
+            gains[f] = mg
+            per_field[f] = {"before": before, "after": nv["value"],
+                            "measured_gain": mg, "n": nv.get("n"),
+                            "direction": direction}
+        best_field = max(sorted(gains), key=lambda f: gains[f])
+        best_gain = gains[best_field]
+        eps = {f: effective_epsilon(policy, new_vals[f]["value"],
+                                    new_vals[f].get("n"),
+                                    new_vals[f].get("ci_eps")) for f in gains}
+        maxreg = policy.get("max_regression")
+        regressed = sorted(f for f, g in gains.items()
+                           if g < -((maxreg if maxreg is not None else eps[f])))
+        if best_gain < eps[best_field]:
+            verdict = "bac-bo"
+            reason = ("gain co dau cua field muc tieu '%s' la %+.4g < epsilon %.4g "
+                      "(cai thien trong nhieu hoac suy giam: khong tinh tien bo)" % (
+                          best_field, best_gain, eps[best_field]))
+        elif regressed:
+            verdict = "bac-bo"
+            reason = ("hoi quy: field %s giam qua nguong (gain %s; nguong %s); "
+                      "du cai thien '%s' (%+.4g) cung bac-bo" % (
+                          ", ".join("'%s'" % f for f in regressed),
+                          ", ".join("%s=%+.4g" % (f, gains[f]) for f in regressed),
+                          ("max_regression=%.4g" % maxreg) if maxreg is not None else "epsilon tung field",
+                          best_field, best_gain))
+        else:
+            verdict = "giu"
+            reason = ("gain co dau cua field muc tieu '%s' la %+.4g >= epsilon %.4g, "
+                      "khong hoi quy field nao" % (best_field, best_gain, eps[best_field]))
+        rejected = []
+        if verdict == "bac-bo":
+            diags = read_diagnoses(run_dir)
+            for f in per_field:
+                v = norm_verdict((diags.get(f) or {}).get("verdict"))
+                if v:
+                    rejected.append("%s:%s" % (f, v))
+        calib = None
+        calib_raw = None
+        if pred_gain > 0:
+            calib_raw = best_gain / pred_gain
+            if best_gain > 0:
+                calib = calib_raw
+        rec = {"round": rnd, "report": os.path.basename(newest),
+               "ts": _now(), "per_field": per_field,
+               "predicted_gain": pred_gain, "measured_gain": best_gain,
+               "max_gain": best_gain, "calibration": calib,
+               "calibration_raw": calib_raw,
+               "verdict": verdict, "reason": reason,
+               "target_field": best_field, "epsilon": eps[best_field],
+               "regressed_fields": regressed,
+               "rejected_branches": rejected,
+               "gpu_hours": gpu, "eval_digest": digest}
+        statefile.append_jsonl(rounds_path(run_dir), rec)
+
+        def fn(old):
+            return _apply_rec_to_state(old, rec)
+        statefile.update_json(state_path(run_dir), fn, default={})
+    try:
+        ok_kg = _sync_record_kg(run_dir, rnd, rec, new_ev)
+        ok_nb = _log_record_notebook(run_dir, rnd, rec)
+        if not (ok_kg and ok_nb):
+            raise RuntimeError("kg/notebook ghi thieu (xem canh bao tren)")
+    except Exception as e:  # noqa: BLE001 - dat co de reconcile, khong bo qua
+        def fk(old):
+            d = dict(old) if isinstance(old, dict) else {}
+            items = list(d.get("kg_pending") or [])
+            if not any(isinstance(x, dict) and x.get("round") == rnd for x in items):
+                items.append({"round": rnd, "error": str(e),
+                              "hint": "python scripts/optimize.py reconcile %s"
+                                      % os.path.abspath(run_dir)})
+            d["kg_pending"] = items
+            return d
+        try:
+            statefile.update_json(state_path(run_dir), fk, default={})
+        except Exception:  # noqa: BLE001 - state loi thi bao, khong che
+            pass
+        print("  [CANH BAO] KG/notebook thieu: chay `python scripts/optimize.py reconcile %s` (%s)"
+              % (os.path.abspath(run_dir), e), file=sys.stderr)
     return rec
 
 
 def _sync_record_kg(run_dir, rnd, rec, new_ev):
     if kg is None:
-        return
+        return True
     ts = _now()
     try:
         exp_id = "exp:optimize-R%02d" % rnd
@@ -1543,15 +1930,17 @@ def _sync_record_kg(run_dir, rnd, rec, new_ev):
         dec_id = "decision:optimize-R%02d" % rnd
         kg.upsert_entity(run_dir, dec_id, "Decision",
                          "Quyet dinh vong R%02d: %s" % (rnd, rec["verdict"]),
-                         body="predicted=%.4g measured=%.4g verdict=%s" % (
+                         body="predicted=%.4g measured=%+.4g verdict=%s" % (
                              rec.get("predicted_gain") or 0, rec.get("measured_gain") or 0,
                              rec["verdict"]),
                          created_at=ts)
         kg.add_edge_checked(run_dir, dec_id, exp_id, "evidenced_by",
                             valid_from=ts, recorded_at=ts,
                             source_ref="optimize/rounds.jsonl")
-    except Exception as e:  # noqa: BLE001 - KG loi khong lam hong record
+        return True
+    except Exception as e:  # noqa: BLE001 - bao that bai de record dat co kg_pending
         print("  [CANH BAO] khong ghi duoc KG (%s)" % e, file=sys.stderr)
+        return False
 
 
 def _log_record_notebook(run_dir, rnd, rec):
@@ -1560,17 +1949,20 @@ def _log_record_notebook(run_dir, rnd, rec):
         ns = argparse.Namespace(
             run_dir=run_dir, type="experiment",
             title="Vong toi uu R%02d: %s" % (rnd, rec["verdict"]),
-            body=("predicted_gain=%.4g measured_gain=%.4g verdict=%s. %s" % (
+            body=("predicted_gain=%.4g measured_gain=%+.4g verdict=%s. %s\n%s" % (
                 rec.get("predicted_gain") or 0, rec.get("measured_gain") or 0,
-                rec["verdict"], json.dumps(rec.get("per_field", {}), ensure_ascii=False))),
+                rec["verdict"], rec.get("reason", ""),
+                json.dumps(rec.get("per_field", {}), ensure_ascii=False))),
             tags="optimize,R%02d" % rnd,
             metrics=json.dumps({"measured_gain": rec.get("measured_gain"),
                                 "predicted_gain": rec.get("predicted_gain")}),
             refs="optimize/rounds.jsonl", author="optimize",
             no_kg=True, kg_edges=None)
         notebook.cmd_log(ns)
-    except Exception as e:  # noqa: BLE001
+        return True
+    except Exception as e:  # noqa: BLE001 - bao that bai de record dat co kg_pending
         print("  [CANH BAO] khong ghi duoc so thi nghiem (%s)" % e, file=sys.stderr)
+        return False
 
 
 # --- CLI ---
@@ -1768,13 +2160,31 @@ def cmd_next(a):
 
 def cmd_record(a):
     try:
-        rec = record_round(a.run_dir, a.round)
+        rec = record_round(a.run_dir, a.round, gpu_hours=a.gpu_hours)
     except OptimizeError as e:
         print("LOI: %s" % e, file=sys.stderr)
         return 2
-    print("da record vong %d: measured_gain=%.4g verdict=%s (rounds.jsonl append-only)" % (
+    if rec.get("already_recorded"):
+        print("da record vong %d truoc do (idempotent: khong ghi them; "
+              "measured_gain=%+.4g verdict=%s)" % (
+                  a.round, rec.get("measured_gain") or 0, rec["verdict"]))
+        return 0
+    print("da record vong %d: measured_gain=%+.4g verdict=%s (rounds.jsonl append-only)" % (
         a.round, rec.get("measured_gain") or 0, rec["verdict"]))
     return 0
+
+
+def cmd_reconcile(a):
+    try:
+        out = reconcile_rounds(a.run_dir)
+    except OptimizeError as e:
+        print("LOI: %s" % e, file=sys.stderr)
+        return 2
+    print("reconcile: %d muc KG/notebook da ghi lai, con %d muc cho" % (
+        out["reconciled"], len(out["pending"])))
+    for item in out["pending"]:
+        print("  - round %s: %s" % (item.get("round"), item.get("error")))
+    return 0 if not out["pending"] else 1
 
 
 def main(argv=None):
@@ -1804,12 +2214,19 @@ def main(argv=None):
     p_next.add_argument("--json", action="store_true")
     p_next.add_argument("--apply", action="store_true",
                         help="Ghi vong vao plan.json (idempotent; tu choi neu vong truoc chua record)")
-    p_rec = sp.add_parser("record", help="Ghi nhan ket qua vong N")
+    p_rec = sp.add_parser("record", help="Ghi nhan ket qua vong N (idempotent)")
     p_rec.add_argument("run_dir")
     p_rec.add_argument("--round", type=int, required=True)
+    p_rec.add_argument("--gpu-hours", type=float, default=None,
+                       help="So gio GPU THAT cua vong (hoac de worker viet "
+                            "reports/round-*/usage.json {\"gpu_hours\": X}); "
+                            "thieu ma policy co cap gpu_hours -> tu choi record")
+    p_recn = sp.add_parser("reconcile", help="Ghi lai phan KG/notebook thieu (kg_pending)")
+    p_recn.add_argument("run_dir")
     a = ap.parse_args(argv)
     handlers = {"init": cmd_init, "status": cmd_status,
-                "next": cmd_next, "record": cmd_record}
+                "next": cmd_next, "record": cmd_record,
+                "reconcile": cmd_reconcile}
     return handlers[a.cmd](a)
 
 

@@ -13,6 +13,7 @@
   "error_analysis_split": "val",
   "data_sources": [],
   "approved_sources": [],
+  "max_regression": null,
   "weights": {},
   "targets": {},
   "metrics_source": null,

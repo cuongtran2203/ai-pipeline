@@ -33,7 +33,11 @@
       "description": "Chi val|oof. Tu choi test: tap test khoa chi cham mot lan o I-final qua seal."
     },
     "data_sources": {"type": "array", "items": {"type": "string"}, "description": "Nguon du lieu ngoai can dung (can duyet tung nguon)."},
-    "approved_sources": {"type": "array", "items": {"type": "string"}, "description": "Nguon da duoc nguoi duyet (research truoc build chi voi nguon da duyet)."},
+    "approved_sources": {"type": "array", "items": {"type": "string"}, "description": "ID registry da duoc nguoi duyet tu truoc (so khop CHINH XAC id, khong substring); thieu -> luon sinh gate duyet nguoi that."},
+    "max_regression": {
+      "description": "Nguong hoi quy: field khac giam qua nguong nay thi bac-bo (null = dung epsilon tung field).",
+      "type": ["number", "null"], "minimum": 0
+    },
     "weights": {"type": "object", "additionalProperties": {"type": "number", "minimum": 0}, "description": "Trong so theo field/component."},
     "metrics_source": {
       "description": "Khai bao NGUON METRIC (OP3, bat buoc khi eval.json khong co eval_contract va co nhieu bang/hang ablation): chi bang khop moi duoc dung; khong khai bao -> status/next LOI fail-closed, init liet ke bang ung vien.",
@@ -44,7 +48,8 @@
         "field_column": {"type": "string", "default": "item", "description": "Cot ten field (mac dinh item)."},
         "value_column": {"type": "string", "default": "auto", "description": "Cot gia tri; 'auto' = value hoac correct/total."},
         "field_regex": {"type": "string", "description": "Regex trich khoa field (nhom 1); mac dinh lay phan truoc dau '·'."},
-        "exclude_regex": {"type": "string", "description": "Regex loai hang."}
+        "exclude_regex": {"type": "string", "description": "Regex loai hang."},
+        "split_value": {"type": "string", "enum": ["val", "oof"], "description": "Split mac dinh cho cac hang khong ghi split (chi val|oof; test/train/rong bi tu choi)."}
       }
     },
     "default_target": {
