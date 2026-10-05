@@ -223,7 +223,7 @@ class ReplayScoring(unittest.TestCase):
 
     def test_case_that_su_co_that(self):
         self.assertGreaterEqual(len(self.cases), 8)
-        self.assertLessEqual(len(self.cases), 12)
+        self.assertLessEqual(len(self.cases), 30)  # OP1 ngoai le duoc duyet: them case optimize-after-baseline (tong 15)
         incident = [c for c in self.cases.values() if c.get("source") == "incident"]
         self.assertGreaterEqual(len(incident), 8)
         self.assertTrue(all(c.get("status") in ("active", "draft") for c in self.cases.values()))

@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Optimize policy (optimize_policy.json) — bo dieu khien vong toi uu bat buoc sau baseline",
+  "description": "Nguoi duyet o G2 cung playbook. Vong toi uu la buoc BAT BUOC sau baseline: coordinator chay `optimize.py next` sau moi vong cho toi khi no tra STOP. Ky luat test: error_analysis_split chi 'val'|'oof' (test khoa cham mot lan o I-final qua seal).",
+  "type": "object",
+  "required": ["max_rounds", "patience", "budget", "allowed_actions", "error_analysis_split", "targets"],
+  "properties": {
+    "run_id": {"type": "string"},
+    "policy_version": {"type": "string"},
+    "updated_at": {"type": "string"},
+    "approved_by": {"type": "string"},
+    "approved_at_G2": {"type": "boolean", "description": "Nguoi da duyet o G2 cung playbook."},
+    "max_rounds": {"type": "integer", "minimum": 1, "description": "So vong toi uu toi da."},
+    "epsilon": {
+      "description": "Cai thien toi thieu co y nghia. null = mac dinh theo sai so chuan bo danh gia (1/2 SE).",
+      "type": ["number", "null"], "minimum": 0
+    },
+    "patience": {"type": "integer", "minimum": 1, "description": "So vong lien tiep cai thien < epsilon thi STOP plateau."},
+    "top_k": {"type": "integer", "minimum": 1, "default": 2, "description": "So thanh phan yeu chon moi vong (khoang cach x trong so)."},
+    "budget": {
+      "type": "object",
+      "properties": {
+        "gpu_hours": {"type": "number", "minimum": 0},
+        "max_tasks": {"type": "integer", "minimum": 0}
+      }
+    },
+    "allowed_actions": {
+      "type": "array", "minItems": 1,
+      "items": {"type": "string", "enum": ["retrain", "postprocess", "add_module", "research_data", "collect_data", "relabel"]}
+    },
+    "error_analysis_split": {
+      "type": "string", "enum": ["val", "oof"],
+      "description": "Chi val|oof. Tu choi test: tap test khoa chi cham mot lan o I-final qua seal."
+    },
+    "data_sources": {"type": "array", "items": {"type": "string"}, "description": "Nguon du lieu ngoai can dung (can duyet tung nguon)."},
+    "approved_sources": {"type": "array", "items": {"type": "string"}, "description": "Nguon da duoc nguoi duyet (research truoc build chi voi nguon da duyet)."},
+    "weights": {"type": "object", "additionalProperties": {"type": "number", "minimum": 0}, "description": "Trong so theo field/component."},
+    "targets": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "required": ["target"],
+        "properties": {
+          "metric": {"type": "string"},
+          "target": {"type": "number"},
+          "direction": {"type": "string", "enum": ["higher", "lower"]}
+        }
+      },
+      "description": "Target theo field lay tu spec/eval."
+    }
+  }
+}
