@@ -33,7 +33,7 @@ At run start `python scripts/notebook.py init runs/<id> --title "<problem>"`. Wo
 3. **Planning** (debate: 2 model-proposers on different agents + critic + architect/judge) → `ai-pipeline-planning`. Output `plan.json`. **Gate G2**: human approves plan and deployment method.
 4. **Module build**: first a cheap **B0 baseline probe (C1)**, then one module-dev worker per module, parallel by DAG → `ai-pipeline-module-dev`. **Gate G3** before any training: GPU server, GPU type, CUDA, framework (or open-source link).
 5. **Integration** (integrator, then error-analyst) → `ai-pipeline-integration`.
-6. **Optimize loop**: each round = written hypothesis + predicted gain → fix → re-eval (C2). Stop by the rules in `ai-pipeline-feasibility` (target met, ceiling reached, diminishing returns, round cap 3 unless the user extends). If target > estimated ceiling, ask the human; never loop blindly.
+6. **Optimize loop (BAT BUOC sau baseline, khong phai tuy chon)** → `ai-pipeline-optimize` (`python scripts/optimize.py init|status|next|record`): sau moi vong coordinator chay `optimize.py next` cho toi khi no tra STOP (5 dieu kien: dat target → `I-final` test khoa mot lan qua seal roi release; ceiling thap hon target hoac OBJECTIVE/NOISE → hoi nguoi; het hieu qua can bien; het max_rounds; het budget). Lap va phan tich loi chi tren val that hoac OOF; test khoa chi cham mot lan o cuoi.
 7. **Release**: package for the chosen deployment, final report via `ai-pipeline-report`.
 
 ## Steps

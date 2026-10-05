@@ -1,0 +1,18 @@
+{
+  "id": "ext-ten-dataset-v1",
+  "name": "Ten dataset cong khai",
+  "version": "ds-ext-v1",
+  "source_url": "https://nguon-that-vi-du.example/dataset",
+  "license": "CC BY 4.0",
+  "license_ok": false,
+  "retrieved_at": "2026-01-01T00:00:00Z",
+  "domain": "mien du lieu: nguon/nguoi tao, ngon ngu/bo ky tu, dinh dang crop, do phan giai",
+  "intended_use": "chi dung de train/pretrain cho module X; KHONG dua vao val/test cua du an",
+  "domain_shift_assessment": "BAT BUOC: khac gi mien dich (nguon, chat luong, lop, do kho) + cach kiem bang thi nghiem nho tren val that truoc khi tin",
+  "location": "/data/external/ten-dataset",
+  "size_bytes": 0,
+  "archive_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "manifest": null,
+  "pilot_result": "chua chay thi nghiem lech phan bo",
+  "notes": "nguon tham chieu that, danh dau 'chua xac minh' neu chua kiem"
+}
