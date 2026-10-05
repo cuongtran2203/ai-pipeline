@@ -35,6 +35,23 @@
     "data_sources": {"type": "array", "items": {"type": "string"}, "description": "Nguon du lieu ngoai can dung (can duyet tung nguon)."},
     "approved_sources": {"type": "array", "items": {"type": "string"}, "description": "Nguon da duoc nguoi duyet (research truoc build chi voi nguon da duyet)."},
     "weights": {"type": "object", "additionalProperties": {"type": "number", "minimum": 0}, "description": "Trong so theo field/component."},
+    "metrics_source": {
+      "description": "Khai bao NGUON METRIC (OP3, bat buoc khi eval.json khong co eval_contract va co nhieu bang/hang ablation): chi bang khop moi duoc dung; khong khai bao -> status/next LOI fail-closed, init liet ke bang ung vien.",
+      "type": ["object", "null"],
+      "properties": {
+        "table_title_regex": {"type": "string", "description": "Regex ten bang (khop nhieu bang thi dung tat ca)."},
+        "table_index": {"type": "integer", "minimum": 0, "description": "Index bang trong eval.json moi nhat."},
+        "field_column": {"type": "string", "default": "item", "description": "Cot ten field (mac dinh item)."},
+        "value_column": {"type": "string", "default": "auto", "description": "Cot gia tri; 'auto' = value hoac correct/total."},
+        "field_regex": {"type": "string", "description": "Regex trich khoa field (nhom 1); mac dinh lay phan truoc dau '·'."},
+        "exclude_regex": {"type": "string", "description": "Regex loai hang."}
+      }
+    },
+    "default_target": {
+      "description": "Target mac dinh cho moi field chua co targets.<field> (vd. 0.99 trich tu spec 'moi field >= 99%'); null = thieu target -> next STOP-hoi-nguoi.",
+      "type": ["number", "null"]
+    },
+    "default_target_source": {"type": "string", "description": "Trich dan nguon cua default_target (spec.md/plan.json)."},
     "targets": {
       "type": "object",
       "additionalProperties": {
