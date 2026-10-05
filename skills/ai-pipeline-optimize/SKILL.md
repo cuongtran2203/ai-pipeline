@@ -12,9 +12,10 @@ Vong toi uu la buoc **BAT BUOC** sau baseline, khong phai tuy chon. Chu trinh da
 | 0. Policy | `python scripts/optimize.py init <run_dir>` | Tu `templates/optimize_policy.template.json`; nguoi duyet o **G2** cung playbook. Tu dien `default_target` tu spec neu ro; liet ke bang ung vien de chon `metrics_source` |
 | 0b. Chon bang | `python scripts/optimize.py init <run_dir> --metrics-table <index\|regex> --field-col item --value-col auto` | Ghi `metrics_source` vao policy (regex khop nhieu bang thi dung tat ca) |
 | 1. Trang thai | `python scripts/optimize.py status <run_dir>` | Bang tieng Viet moi field/component: baseline, moi nhat, target, khoang cach, xu huong, so vong, verdict |
-| 2. Quyet dinh | `python scripts/optimize.py next <run_dir> [--json] [--apply]` | STOP (5 dieu kien) hoac GO; `--apply` ghi vong vao plan.json (idempotent), roi chay `python scripts/plan_to_orca.py --create/--start-ready` nhu thuong |
+| 2. Quyet dinh | `python scripts/optimize.py next <run_dir> [--json] [--apply]` | STOP (5 dieu kien) hoac GO; `--apply` ghi vong vao plan.json **trong mot khoa giao dich** (doc trong khoa, idempotent), roi chay `python scripts/plan_to_orca.py --create/--start-ready` nhu thuong |
 | 3. Chay task | Orca workers | DIAG truoc (neu thieu diagnosis), roi hanh dong theo nhanh, ket vong bang evaluate + report |
-| 4. Ghi nhan | `python scripts/optimize.py record <run_dir> --round N` | Doc eval moi, ghi `optimize/rounds.jsonl` (append-only), cap nhat state, KG, so |
+| 4. Ghi nhan | `python scripts/optimize.py record <run_dir> --round N --gpu-hours X` | Gain **co dau** + kiem hoi quy; ghi `optimize/rounds.jsonl` (append-only, idempotent) + state **duoi mot khoa**; KG/so sau, loi thi `reconcile` |
+| 4b. Reconcile | `python scripts/optimize.py reconcile <run_dir>` | Ghi lai phan KG/notebook thieu (co `kg_pending` trong state) |
 
 ## Dieu kien STOP (coordinator ap dung, ghi vao rounds/state)
 
@@ -22,11 +23,12 @@ Vong toi uu la buoc **BAT BUOC** sau baseline, khong phai tuy chon. Chu trinh da
 2. **Hoi nguoi**: `ceiling.json` (C1/C2) thap hon target, hoac verdict OBJECTIVE/NOISE can nguoi (doi metric/spec hoac ha target).
 3. **Het hieu qua can bien**: cai thien < epsilon trong `patience` vong lien tiep (epsilon mac dinh = 1/2 sai so chuan bo danh gia).
 4. **Het max_rounds** (mac dinh 3; nguoi mo rong).
-5. **Het budget** (gpu_hours / so task).
+5. **Het budget** (gpu_hours that do duoc / so task).
 
 ## Ky luat test (khong thuong luong)
 
 - Lap cai thien va phan tich loi **chi tren val that hoac OOF** (cross-fit). `error_analysis_split` trong policy chi nhan `val|oof`; dat `test` bi tu choi.
+- **Split fail-closed**: moi hang metric phai co split `val|oof` (row.split, table.split, `metrics_source.split_value`, hoac `eval_contract.split`); hang thieu split hoac split `train`/rong bi **tu choi** kem thong bao ro (khong am tham cho qua). Hang khai split/test bi bo qua (ky luat test).
 - Neu spec noi "chay test" o baseline thi hieu la **baseline tren val/OOF**; test khoa chay cuoi o `I-final`.
 - `optimize.py` khong bao gio tao task phan tich loi tren split test; bang khai split/test trong eval.json bi bo qua khi doc lich su.
 
@@ -43,9 +45,28 @@ Vong toi uu la buoc **BAT BUOC** sau baseline, khong phai tuy chon. Chu trinh da
 
 ## ID task ngan, on dinh
 
-`R<NN>-<slug toi da 24 ky tu, bo dau>-<hash 6>-<action>` (vd. `R01-hw-start-time-a96699-diag`); cung dau vao → cung id (`--apply` idempotent). Worker ghi `diagnosis.json` voi `component` dung bang field key trong eval.
+`R<NN>-<slug toi da 24 ky tu, bo dau>-<hash 6>-<action>` (vd. `R01-hw-start-time-a96699-diag`); cung dau vao → cung id (`--apply` idempotent, giao dich duoi mot khoa). Worker ghi `diagnosis.json` voi `component` dung bang field key trong eval.
 
-Moi task co `id` dang `R<NN>-<slug24>-<hash6>-<action>` (vd. `R01-hw-start-time-a96699-diag`), deps tuan tu dung thu tu, role/agent theo `agents.json` (nhom code), owns tach biet, acceptance do duoc **voi `predicted_gain` bat buoc** (so du doan tang metric, do tren val/OOF). `record` so predicted vs measured, hieu chinh ti le measured/predicted cho lan sau, nhanh bi bac bo (verdict `bo`) khong sinh lai.
+Moi task co `predicted_gain` bat buoc (so du doan tang metric, do tren val/OOF). `record` so predicted vs measured (gain co dau), hieu chinh ti le measured/predicted cho lan sau (chi vong duong), nhanh bi bac bo (verdict `bac-bo`) khong sinh lai.
+
+## Gain co dau + kiem hoi quy (record)
+
+- `record` tinh gain **CO DAU** theo huong tot cua metric (`higher`/`lower_is_better`); chi verdict **`giu`** khi gain duong cua field muc tieu >= epsilon (epsilon theo sai so chuan/CI neu co). Suy giam (vd. 54/60 → 48/60) → **`bac-bo`**, khong bao gio "giu" nho tri tuyet doi.
+- **Kiem hoi quy**: field khac giam qua epsilon (hoac `max_regression` neu policy dat) → `bac-bo` kem ly do + field bi hai; nhanh bi bac bo khong sinh lai.
+- Hieu chuan measured/predicted chi dung vong gain duong; vong am ghi rieng (`calibration_negative`), khong bao gio lam tang du doan.
+- Cai thien trong nhieu (< epsilon) khong tinh tien bo → dem vao plateau nhu cu.
+
+## Record idempotent + crash-safe
+
+- `record` chay **duoi mot khoa theo run**: kiem round chua ghi + digest eval chua co, round khop `pending_round`, bo artifact day du (`eval.json` + `report.md` + `report.html` cung thu muc round, ten round dung) → moi ghi `rounds.jsonl` + `state.json`. Goi hai lan → lan hai tra "da ghi" (exit 0, khong ghi them).
+- Ghi KG/notebook sau; neu loi dat co `kg_pending` trong state + in lenh `optimize.py reconcile <run_dir>` (khong canh bao roi bo qua). Crash giua cac buoc: lan `record` sau tu hoan tat state nho digest.
+
+## Cong duyet nguon du lieu ngoai (gate nguoi that)
+
+- DATA/STRUCTURE can du lieu ngoai sinh chuoi: `R<NN>-research` (researcher **de xuat, KHONG tai**, dang ky card qua `data_provenance.py register`) → **GATE** `kind: gate` "duyet nguon du lieu ngoai" → build/aux/integrate.
+- Cong do **coordinator hoi NGUOI THAT bang ask** (co che gate G1/G2/G3 cua `plan_to_orca`), ghi `decisions.md`, them id gate vao `done.json`. Task train/aux co `deps` gom gate va acceptance bat buoc ``python scripts/data_provenance.py use-check <run_dir> <DATASET_ID>`` thanh cong (da register+approve, hash khop) truoc khi train.
+- `policy.approved_sources` la danh sach **ID registry** da duyet tu truoc (**so khop chinh xac**, khong substring); thieu → luon sinh gate.
+- **Gioi han that**: CLI khong xac thuc danh tinh nguoi duyet (chuoi `person:<ten>` ai cung go duoc); cong nguoi that la co che gate cua coordinator, khong phai lenh `data_provenance approve`.
 
 ## Hanh dong theo verdict (nhanh da duyet o G2)
 
@@ -62,7 +83,7 @@ Moi task co `id` dang `R<NN>-<slug24>-<hash6>-<action>` (vd. `R01-hw-start-time-
 2. Research dataset chu so viet tay cong khai (ten skill research do task khac viet; day chi tham chieu ten `ai-pipeline-research`).
 3. **Kiem tra lech phan bo** bang thi nghiem nho (train thu → do tren val that) truoc khi tin du lieu ngoai.
 4. Train classifier chu so (co version) → dinh tuyen vao field do theo do tin cay, nguong hieu chinh tren val.
-5. Do lai e2e tren val/OOF → `record`; dat thi giu, khong thi bo nhanh.
+5. Do lai e2e tren val/OOF → `record --gpu-hours X` (so gio GPU that; hoac worker viet `usage.json` trong thu muc round; thieu ma co cap → tu choi); dat thi giu, khong thi bac-bo nhanh.
 
 ## Bay hay gap
 
@@ -71,4 +92,4 @@ Moi task co `id` dang `R<NN>-<slug24>-<hash6>-<action>` (vd. `R01-hw-start-time-
 - **Sua nhieu thu mot luc**: khong biet cai gi gay tac dung; 1 thay doi moi vong.
 - **Du lieu sinh/ngoai lam te di**: luon ablation tren val that; te thi bo, khong co them.
 - **Thu lai nhanh da bi bac bo**: `record` da danh dau; `next` se khong sinh lai.
-- **Vong truoc chua record**: `--apply` tu choi; chay `record --round N` truoc.
+- **Vong truoc chua record**: `--apply` tu choi (giao dich, 2 coordinator cung apply → 1 thang, 1 nhan pending); chay `record --round N --gpu-hours X` truoc.
