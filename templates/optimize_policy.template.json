@@ -1,0 +1,22 @@
+{
+  "run_id": "<run_id>",
+  "policy_version": "v1",
+  "updated_at": "2026-10-05 12:00",
+  "approved_by": "person:user",
+  "approved_at_G2": false,
+  "max_rounds": 3,
+  "epsilon": null,
+  "patience": 2,
+  "top_k": 2,
+  "budget": {"gpu_hours": 8.0, "max_tasks": 10},
+  "allowed_actions": ["retrain", "postprocess", "add_module", "research_data", "collect_data", "relabel"],
+  "error_analysis_split": "val",
+  "data_sources": [],
+  "approved_sources": [],
+  "max_regression": null,
+  "weights": {},
+  "targets": {},
+  "metrics_source": null,
+  "default_target": null,
+  "default_target_source": null
+}

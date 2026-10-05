@@ -1,0 +1,74 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Optimize policy (optimize_policy.json) — bo dieu khien vong toi uu bat buoc sau baseline",
+  "description": "Nguoi duyet o G2 cung playbook. Vong toi uu la buoc BAT BUOC sau baseline: coordinator chay `optimize.py next` sau moi vong cho toi khi no tra STOP. Ky luat test: error_analysis_split chi 'val'|'oof' (test khoa cham mot lan o I-final qua seal).",
+  "type": "object",
+  "required": ["max_rounds", "patience", "budget", "allowed_actions", "error_analysis_split", "targets"],
+  "properties": {
+    "run_id": {"type": "string"},
+    "policy_version": {"type": "string"},
+    "updated_at": {"type": "string"},
+    "approved_by": {"type": "string"},
+    "approved_at_G2": {"type": "boolean", "description": "Nguoi da duyet o G2 cung playbook."},
+    "max_rounds": {"type": "integer", "minimum": 1, "description": "So vong toi uu toi da."},
+    "epsilon": {
+      "description": "Cai thien toi thieu co y nghia. null = mac dinh theo sai so chuan bo danh gia (1/2 SE).",
+      "type": ["number", "null"], "minimum": 0
+    },
+    "patience": {"type": "integer", "minimum": 1, "description": "So vong lien tiep cai thien < epsilon thi STOP plateau."},
+    "top_k": {"type": "integer", "minimum": 1, "default": 2, "description": "So thanh phan yeu chon moi vong (khoang cach x trong so)."},
+    "budget": {
+      "type": "object",
+      "properties": {
+        "gpu_hours": {"type": "number", "minimum": 0},
+        "max_tasks": {"type": "integer", "minimum": 0}
+      }
+    },
+    "allowed_actions": {
+      "type": "array", "minItems": 1,
+      "items": {"type": "string", "enum": ["retrain", "postprocess", "add_module", "research_data", "collect_data", "relabel"]}
+    },
+    "error_analysis_split": {
+      "type": "string", "enum": ["val", "oof"],
+      "description": "Chi val|oof. Tu choi test: tap test khoa chi cham mot lan o I-final qua seal."
+    },
+    "data_sources": {"type": "array", "items": {"type": "string"}, "description": "Nguon du lieu ngoai can dung (can duyet tung nguon)."},
+    "approved_sources": {"type": "array", "items": {"type": "string"}, "description": "ID registry da duoc nguoi duyet tu truoc (so khop CHINH XAC id, khong substring); thieu -> luon sinh gate duyet nguoi that."},
+    "max_regression": {
+      "description": "Nguong hoi quy: field khac giam qua nguong nay thi bac-bo (null = dung epsilon tung field).",
+      "type": ["number", "null"], "minimum": 0
+    },
+    "weights": {"type": "object", "additionalProperties": {"type": "number", "minimum": 0}, "description": "Trong so theo field/component."},
+    "metrics_source": {
+      "description": "Khai bao NGUON METRIC (OP3, bat buoc khi eval.json khong co eval_contract va co nhieu bang/hang ablation): chi bang khop moi duoc dung; khong khai bao -> status/next LOI fail-closed, init liet ke bang ung vien.",
+      "type": ["object", "null"],
+      "properties": {
+        "table_title_regex": {"type": "string", "description": "Regex ten bang (khop nhieu bang thi dung tat ca)."},
+        "table_index": {"type": "integer", "minimum": 0, "description": "Index bang trong eval.json moi nhat."},
+        "field_column": {"type": "string", "default": "item", "description": "Cot ten field (mac dinh item)."},
+        "value_column": {"type": "string", "default": "auto", "description": "Cot gia tri; 'auto' = value hoac correct/total."},
+        "field_regex": {"type": "string", "description": "Regex trich khoa field (nhom 1); mac dinh lay phan truoc dau '·'."},
+        "exclude_regex": {"type": "string", "description": "Regex loai hang."},
+        "split_value": {"type": "string", "enum": ["val", "oof"], "description": "Split mac dinh cho cac hang khong ghi split (chi val|oof; test/train/rong bi tu choi)."}
+      }
+    },
+    "default_target": {
+      "description": "Target mac dinh cho moi field chua co targets.<field> (vd. 0.99 trich tu spec 'moi field >= 99%'); null = thieu target -> next STOP-hoi-nguoi.",
+      "type": ["number", "null"]
+    },
+    "default_target_source": {"type": "string", "description": "Trich dan nguon cua default_target (spec.md/plan.json)."},
+    "targets": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "required": ["target"],
+        "properties": {
+          "metric": {"type": "string"},
+          "target": {"type": "number"},
+          "direction": {"type": "string", "enum": ["higher", "lower"]}
+        }
+      },
+      "description": "Target theo field lay tu spec/eval."
+    }
+  }
+}

@@ -135,6 +135,44 @@ flowchart LR
     CG -->|"graphify query"| AG
 ```
 
+## Vòng tối ưu tự động sau baseline
+
+Sau khi có baseline, pipeline **tự động** lặp cải tiến tới độ chính xác cao nhất đạt được một cách trung thực. Mọi vòng đo trên **val thật hoặc OOF**; tập test khóa chỉ chạm một lần ở cuối (lặp trên test sẽ làm con số cuối bị thổi phồng).
+
+```mermaid
+flowchart TD
+    BASE["Baseline trên val/OOF"] --> NEXT["optimize.py next<br/>chọn thành phần yếu theo khoảng cách x trọng số"]
+    NEXT --> STOPQ{"Điều kiện dừng?"}
+    STOPQ -->|"mọi field đạt target"| FINAL["Test khóa một lần<br/>rồi release"]
+    STOPQ -->|"target vượt ceiling<br/>hoặc nhãn mơ hồ"| ASK["Dừng, hỏi người"]
+    STOPQ -->|"hết hiệu quả cận biên,<br/>hết vòng, hết ngân sách"| REPORT["Dừng, báo cáo kết quả tốt nhất"]
+    STOPQ -->|"tiếp tục"| DIAG["Chẩn đoán thành phần yếu<br/>DATA / MODEL / STRUCTURE / NOISE / OBJECTIVE"]
+    DIAG --> ACT{"Hành động"}
+    ACT -->|"MODEL"| RET["Retrain biến thể<br/>độ phân giải, quy mô, ngữ cảnh"]
+    ACT -->|"hậu xử lý được"| POST["Thêm luật hậu xử lý<br/>chuẩn hóa, ràng buộc định dạng"]
+    ACT -->|"DATA / STRUCTURE<br/>cần dữ liệu ngoài"| RES["Researcher tìm dataset công khai<br/>giấy phép, độ lệch miền"]
+    RES --> GATE{{"Gate: người duyệt nguồn"}}
+    GATE --> PROV["Tải trong container<br/>data_provenance use-check"]
+    PROV --> AUX["Train module phụ<br/>vd. bản phân loại chữ số viết tay"]
+    AUX --> ROUTE["Định tuyến theo độ tin cậy<br/>ngưỡng hiệu chỉnh trên val"]
+    RET --> EVAL["Đánh giá val/OOF + report"]
+    POST --> EVAL
+    ROUTE --> EVAL
+    EVAL --> REC["optimize.py record<br/>gain có dấu, kiểm hồi quy các field khác"]
+    REC -->|"giữ"| NEXT
+    REC -->|"bác bỏ: nhánh không thử lại"| NEXT
+```
+
+Ví dụ: OCR đọc kém chữ số viết tay → chẩn đoán STRUCTURE → researcher tìm dataset chữ số viết tay → người duyệt nguồn và giấy phép → train bản phân loại chữ số trong container → định tuyến theo độ tin cậy vào các field số → đo lại trên val thật; nếu gain âm hoặc làm tụt field khác thì vòng bị bác bỏ.
+
+| Lệnh | Việc |
+|---|---|
+| `python scripts/optimize.py init <run>` | tạo policy (target lấy từ spec, nguồn metric khai báo; liệt kê bảng ứng viên để bạn chọn) |
+| `python scripts/optimize.py status <run>` | bảng baseline / mới nhất / target / khoảng cách theo field |
+| `python scripts/optimize.py next <run> --apply` | quyết định bước kế tiếp và ghi vòng vào `plan.json` (giao dịch, idempotent) |
+| `python scripts/optimize.py record <run> --round N --gpu-hours X` | ghi kết quả vòng (gain có dấu, hồi quy, idempotent) |
+| `python scripts/data_provenance.py register\|approve\|verify\|use-check` | đăng ký dataset ngoài có truy vết (giấy phép, hash, đánh giá lệch miền) |
+
 ## Cưỡng chế, eval và giám sát (vòng kín sau release)
 
 ```mermaid
@@ -255,9 +293,9 @@ Tạo thư mục `skills/<tên-skill>/SKILL.md` rồi `ai-pipeline sync-skills` 
 
 ```
 .ai-pipeline/AGENTS.md   luật chung của workflow (hoặc đọc qua AGENTS.md của bạn)
-skills/                  20 skill: ai-pipeline, -intake, -analysis, -planning, -module-dev, -integration,
+skills/                  22 skill: ai-pipeline, -intake, -analysis, -planning, -module-dev, -integration,
                          -report, -orca, -status, -feasibility, -notebook, -graph, -agents, -sandbox,
-                         -diagnose, -knowledge, -autonomy, -hooks, -evals, -monitor
+                         -diagnose, -knowledge, -autonomy, -hooks, -evals, -monitor, -optimize, -research
 .claude/skills/  .agents/skills/   bản sao cho Claude Code / Codex (theo --agent)
 roles/                   prompt role dùng chung cho 2 runtime
 templates/  schemas/     spec, report, playbook, autonomy policy; plan/eval/kg schema
@@ -276,7 +314,7 @@ scripts/                 validate_spec, plan_to_orca, render_report, project_sta
 ## Phát triển repo này
 
 ```bash
-python -m unittest discover -s tests     # 340+ test, stdlib
+python -m unittest discover -s tests     # 450+ test, stdlib
 python scripts/evals.py run --static     # eval cấu hình agent (CI)
 python scripts/sync_skills.py --check    # skills/ là nguồn chuẩn, .claude/ và .agents/ là bản sao
 pip install .                            # build wheel (đóng gói skills/roles/... vào ai_pipeline/payload)
