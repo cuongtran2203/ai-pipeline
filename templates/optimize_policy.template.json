@@ -14,5 +14,8 @@
   "data_sources": [],
   "approved_sources": [],
   "weights": {},
-  "targets": {}
+  "targets": {},
+  "metrics_source": null,
+  "default_target": null,
+  "default_target_source": null
 }

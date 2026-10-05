@@ -9,7 +9,8 @@ Vong toi uu la buoc **BAT BUOC** sau baseline, khong phai tuy chon. Chu trinh da
 
 | Buoc | Lenh | Ghi chu |
 |---|---|---|
-| 0. Policy | `python scripts/optimize.py init <run_dir>` | Tu `templates/optimize_policy.template.json`; nguoi duyet o **G2** cung playbook |
+| 0. Policy | `python scripts/optimize.py init <run_dir>` | Tu `templates/optimize_policy.template.json`; nguoi duyet o **G2** cung playbook. Tu dien `default_target` tu spec neu ro; liet ke bang ung vien de chon `metrics_source` |
+| 0b. Chon bang | `python scripts/optimize.py init <run_dir> --metrics-table <index\|regex> --field-col item --value-col auto` | Ghi `metrics_source` vao policy (regex khop nhieu bang thi dung tat ca) |
 | 1. Trang thai | `python scripts/optimize.py status <run_dir>` | Bang tieng Viet moi field/component: baseline, moi nhat, target, khoang cach, xu huong, so vong, verdict |
 | 2. Quyet dinh | `python scripts/optimize.py next <run_dir> [--json] [--apply]` | STOP (5 dieu kien) hoac GO; `--apply` ghi vong vao plan.json (idempotent), roi chay `python scripts/plan_to_orca.py --create/--start-ready` nhu thuong |
 | 3. Chay task | Orca workers | DIAG truoc (neu thieu diagnosis), roi hanh dong theo nhanh, ket vong bang evaluate + report |
@@ -29,9 +30,22 @@ Vong toi uu la buoc **BAT BUOC** sau baseline, khong phai tuy chon. Chu trinh da
 - Neu spec noi "chay test" o baseline thi hieu la **baseline tren val/OOF**; test khoa chay cuoi o `I-final`.
 - `optimize.py` khong bao gio tao task phan tich loi tren split test; bang khai split/test trong eval.json bi bo qua khi doc lich su.
 
-## Gia thuyet + predicted_gain (bat buoc moi task hanh dong)
+## Nguon metric khai bao (khong doan bang)
 
-Moi task co `id` dang `R<NN>-<comp>-<action>`, deps tuan tu dung thu tu, role/agent theo `agents.json` (nhom code), owns tach biet, acceptance do duoc **voi `predicted_gain` bat buoc** (so du doan tang metric, do tren val/OOF). `record` so predicted vs measured, hieu chinh ti le measured/predicted cho lan sau, nhanh bi bac bo (verdict `bo`) khong sinh lai.
+- Component/field chi lay tu **(a)** `eval_contract` cua eval.json (schema v2: ban danh gia co hop dong) hoac **(b)** khai bao tuong minh `metrics_source` trong `optimize_policy.json` (`table_title_regex` hoac `table_index`, `field_column`, `value_column`, `field_regex`/`exclude_regex` tuy chon).
+- Khong co khai bao ma eval.json mo ho (nhieu bang, hang ablation nhu `RPA +P +augment ... hieu -3.9d CI95 ...`): `status`/`next` **LOI fail-closed**, khong tu doan. `init` quet eval.json moi nhat va **liet ke bang ung vien** (ten, so hang, gia tri mau, danh dau bang giong ablation) de nguoi chon: `init --metrics-table <index|regex> --field-col X --value-col Y`.
+- Nhieu hang cung (nhom, ten) (RC/RA/RCA...) gop mot lan: chung baseline thi lay baseline; hang tong `ALL` chi de bao cao, khong bao gio la component sua. Cot CI/sai so chuan neu co dung lam epsilon.
+
+## Target: thieu thi STOP-hoi-nguoi (khong GO)
+
+- Target hieu dung = `targets.<field>.target`, roi `default_target`. `init` tu dien `default_target` khi spec.md/plan viet ro (vd. `moi field >= 99%` → 0.99 + ghi nguon); khong ro thi de trong, can nguoi duyet.
+- Field chua co target: `next` tra **STOP-hoi-nguoi** liet ke field thieu + goi y tu spec, khong sinh task.
+
+## ID task ngan, on dinh
+
+`R<NN>-<slug toi da 24 ky tu, bo dau>-<hash 6>-<action>` (vd. `R01-hw-start-time-a96699-diag`); cung dau vao → cung id (`--apply` idempotent). Worker ghi `diagnosis.json` voi `component` dung bang field key trong eval.
+
+Moi task co `id` dang `R<NN>-<slug24>-<hash6>-<action>` (vd. `R01-hw-start-time-a96699-diag`), deps tuan tu dung thu tu, role/agent theo `agents.json` (nhom code), owns tach biet, acceptance do duoc **voi `predicted_gain` bat buoc** (so du doan tang metric, do tren val/OOF). `record` so predicted vs measured, hieu chinh ti le measured/predicted cho lan sau, nhanh bi bac bo (verdict `bo`) khong sinh lai.
 
 ## Hanh dong theo verdict (nhanh da duyet o G2)
 
