@@ -453,5 +453,274 @@ class MutationTests(unittest.TestCase):
         return tmp_run(self)
 
 
+def write_realistic_eval(run, dirname):
+    """eval.json dang THUC (copy cau truc tu timesheet-ocr): 1 bang ablation
+    (hang 'nhom/field · bien the · hieu ... CI95 ...') + 1 bang metric theo field."""
+    d = os.path.join(run, "reports", dirname)
+    os.makedirs(d, exist_ok=True)
+    abl = [
+        {"item": "hw/ALL \u00b7 RC +viet tay ghep (C) \u00b7 hieu -2.2d CI95 [-4.2; -0.3] \u2192 HAI",
+         "correct": 930, "total": 1005, "baseline_correct": 952},
+        {"item": "hw/date \u00b7 RC +viet tay ghep (C) \u00b7 hieu -4.1d CI95 [-9.0; -0.0] \u2192 HAI",
+         "correct": 181, "total": 195, "baseline_correct": 189},
+        {"item": "hw/date \u00b7 RA +augment crop that (A) \u00b7 hieu -3.6d CI95 [-7.2; -0.9] \u2192 HAI",
+         "correct": 182, "total": 195, "baseline_correct": 189},
+        {"item": "hw/start_time \u00b7 RC +viet tay ghep (C) \u00b7 hieu -2.0d CI95 [-5.1; +1.0]",
+         "correct": 175, "total": 198, "baseline_correct": 179},
+        {"item": "print/company_name \u00b7 RP +in synth (P) \u00b7 hieu +0.0d CI95 [+0.0; +0.0]",
+         "correct": 252, "total": 252, "baseline_correct": 252},
+    ]
+    metric = [
+        {"item": "Ngay", "correct": 61, "total": 65, "baseline_correct": 63},
+        {"item": "Gio bat dau", "correct": 60, "total": 66, "baseline_correct": 55},
+    ]
+    ev = {"title": "t", "version": {"model": "m-v1", "dataset": "ds-v1"},
+          "overview": {"status": "s", "method": "m", "result": "r"},
+          "tables": [{"name": "rec-hw ablation (val, EM; hieu vs baseline)",
+                       "metric": "exact match", "rows": abl},
+                      {"name": "EM tung field tren crop GT val",
+                       "metric": "exact match", "rows": metric}],
+          "errors": [], "conclusion": {"fixes": []}}
+    with io.open(os.path.join(d, "eval.json"), "w", encoding="utf-8") as f:
+        json.dump(ev, f, ensure_ascii=False)
+
+
+def write_policy_declared(run, table_regex, **over):
+    kw = {"metrics_source": {"table_title_regex": table_regex,
+                             "field_column": "item", "value_column": "auto"},
+          "targets": {}}
+    kw.update(over)
+    write_policy(run, **kw)
+
+
+class DeclaredSourceTests(unittest.TestCase):
+    def test_only_declared_table_used_ablation_ignored(self):
+        run = tmp_run(self)
+        write_policy_declared(run, "EM tung field",
+                              targets={"Ngay": {"metric": "accuracy", "target": 0.99},
+                                       "Gio bat dau": {"metric": "accuracy", "target": 0.99}})
+        write_realistic_eval(run, "round-01-baseline")
+        rep = optimize.build_status(run)
+        got = {r["field"] for r in rep["rows"]}
+        self.assertEqual(got, {"Ngay", "Gio bat dau"})
+        row = next(r for r in rep["rows"] if r["field"] == "Ngay")
+        self.assertAlmostEqual(row["latest"], 61 / 65)
+
+    def test_ablation_table_grouped_to_baseline(self):
+        run = tmp_run(self)
+        write_policy_declared(run, "ablation",
+                              targets={"hw/date": {"metric": "accuracy", "target": 0.99},
+                                       "hw/start_time": {"metric": "accuracy", "target": 0.99}})
+        write_realistic_eval(run, "round-01-baseline")
+        rep = optimize.build_status(run)
+        got = {r["field"] for r in rep["rows"]}
+        self.assertIn("hw/date", got)
+        self.assertIn("hw/start_time", got)
+        # gop 2 hang hw/date ve baseline chung 189/195 (khong phai 181 hay 182)
+        row = next(r for r in rep["rows"] if r["field"] == "hw/date")
+        self.assertAlmostEqual(row["latest"], 189 / 195)
+        self.assertFalse(any("hieu" in r["field"] or "CI95" in r["field"]
+                             for r in rep["rows"]))
+
+    def test_no_source_multi_table_fails_closed(self):
+        run = tmp_run(self)
+        write_policy(run)  # khong metrics_source, eval 2 bang khong contract
+        write_realistic_eval(run, "round-01-baseline")
+        with self.assertRaises(optimize.OptimizeError) as ctx:
+            optimize.build_status(run)
+        msg = str(ctx.exception)
+        self.assertIn("metrics_source", msg)
+        self.assertIn("init", msg)
+        with self.assertRaises(optimize.OptimizeError):
+            optimize.decide_next(run)
+
+    def test_single_simple_table_still_works_without_source(self):
+        # tuong thich nguoc: file don gian 1 bang khong can khai bao
+        run = tmp_run(self)
+        write_policy(run)
+        write_eval(run, "round-01-baseline", {"Ngay": (54, 60)})
+        rep = optimize.build_status(run)
+        self.assertEqual([r["field"] for r in rep["rows"]], ["Ngay"])
+
+    def test_init_lists_candidates_and_marks_ablation(self):
+        run = tmp_run(self)
+        write_realistic_eval(run, "round-03-ablation")
+        r = run_cli("init", run)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("rec-hw ablation", r.stdout)
+        self.assertIn("EM tung field", r.stdout)
+        self.assertIn("ABLATION", r.stdout)
+
+    def test_init_metrics_table_writes_policy_then_status(self):
+        run = tmp_run(self)
+        write_realistic_eval(run, "round-03-ablation")
+        r = run_cli("init", run, "--metrics-table", "EM tung field",
+                    "--field-col", "item", "--value-col", "auto")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        pol = json.load(io.open(os.path.join(run, "optimize_policy.json"),
+                                encoding="utf-8"))
+        self.assertEqual(pol["metrics_source"]["table_title_regex"], "EM tung field")
+        # them target roi status chi ra field cua bang khai bao
+        pol["targets"] = {"Ngay": {"metric": "accuracy", "target": 0.99},
+                          "Gio bat dau": {"metric": "accuracy", "target": 0.99}}
+        json.dump(pol, io.open(os.path.join(run, "optimize_policy.json"),
+                               "w", encoding="utf-8"), ensure_ascii=False)
+        rep = optimize.build_status(run)
+        self.assertEqual({r["field"] for r in rep["rows"]}, {"Ngay", "Gio bat dau"})
+
+
+class MissingTargetTests(unittest.TestCase):
+    def _declared_run(self):
+        run = tmp_run(self)
+        write_policy_declared(run, "EM tung field")
+        write_realistic_eval(run, "round-01-baseline")
+        return run
+
+    def test_missing_target_stop_ask_no_tasks(self):
+        run = self._declared_run()
+        dec = optimize.decide_next(run)
+        self.assertEqual(dec["decision"], optimize.STOP_ASK)
+        self.assertTrue(dec["stop"])
+        self.assertEqual(dec["tasks"], [])
+        self.assertIn("Ngay", dec["missing_targets"])
+        rep = optimize.build_status(run)
+        self.assertTrue(all(r["target"] is None for r in rep["rows"]))
+
+    def test_default_target_applies_to_all_fields(self):
+        run = self._declared_run()
+        pol = json.load(io.open(os.path.join(run, "optimize_policy.json"),
+                                encoding="utf-8"))
+        pol["default_target"] = 0.99
+        json.dump(pol, io.open(os.path.join(run, "optimize_policy.json"),
+                               "w", encoding="utf-8"), ensure_ascii=False)
+        rep = optimize.build_status(run)
+        self.assertTrue(all(r["target"] == 0.99 for r in rep["rows"]))
+        self.assertTrue(all(r["target_source"] == "default" for r in rep["rows"]))
+        dec = optimize.decide_next(run)
+        self.assertEqual(dec["decision"], "GO")
+        self.assertTrue(any("diag" in t["id"] for t in dec["tasks"]))
+
+    def test_init_autofills_default_target_from_spec(self):
+        run = tmp_run(self)
+        write_realistic_eval(run, "round-01-baseline")
+        with io.open(os.path.join(run, "spec.md"), "w", encoding="utf-8") as f:
+            f.write("# Spec\nMoi field >= 99% exact match tren tap test.\n")
+        r = run_cli("init", run)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        pol = json.load(io.open(os.path.join(run, "optimize_policy.json"),
+                                encoding="utf-8"))
+        self.assertAlmostEqual(pol["default_target"], 0.99)
+        self.assertIn("spec.md", pol.get("default_target_source", ""))
+
+
+class ShortIdTests(unittest.TestCase):
+    def test_id_format_short_stable_ascii(self):
+        tid = optimize._task_id(1, "Gio bat dau", "diag")
+        self.assertRegex(tid, r"^R\d{2}-[a-z0-9-]{1,24}-[0-9a-f]{6}-diag$")
+        self.assertTrue(tid.startswith("R01-gio-bat-dau-"))
+        self.assertEqual(tid, optimize._task_id(1, "Gio bat dau", "diag"))
+        self.assertNotEqual(tid, optimize._task_id(1, "Gio ket thuc", "diag"))
+        self.assertNotEqual(tid, optimize._task_id(1, "Gio bat dau", "retrain"))
+
+    def test_long_variant_item_id_still_bounded(self):
+        tid = optimize._task_id(
+            12, "RPA +P +augment (P,A) \u00b7 hieu -3.9d CI95 [-5.9;-1.8] \u2192 HAI",
+            "postprocess")
+        self.assertRegex(tid, r"^R\d{2}-[a-z0-9-]{1,24}-[0-9a-f]{6}-postprocess$")
+        self.assertLessEqual(len(tid), 4 + 24 + 1 + 6 + 1 + len("postprocess"))
+
+    def test_next_diag_ids_short_and_unique(self):
+        run = tmp_run(self)
+        write_policy_declared(run, "EM tung field", default_target=0.99)
+        write_realistic_eval(run, "round-01-baseline")
+        dec = optimize.decide_next(run)
+        ids = [t["id"] for t in dec["tasks"]]
+        self.assertEqual(len(ids), len(set(ids)))
+        for tid in ids:
+            if tid.endswith("-eval"):
+                continue
+            self.assertRegex(tid, r"^R\d{2}-[a-z0-9-]{1,24}-[0-9a-f]{6}-[a-z]+$")
+            self.assertLessEqual(len(tid), 60)
+
+
+class TotalRowTests(unittest.TestCase):
+    def test_all_row_report_only_never_actionable(self):
+        run = tmp_run(self)
+        write_policy_declared(run, "ablation", default_target=0.99,
+                              targets={"hw/ALL": {"metric": "accuracy", "target": 0.999}})
+        write_realistic_eval(run, "round-01-baseline")
+        rep = optimize.build_status(run)
+        alls = [r for r in rep["rows"] if r["is_total"]]
+        self.assertTrue(alls)
+        self.assertTrue(all("chi bao cao" in r["verdict"] for r in alls))
+        dec = optimize.decide_next(run)
+        blob = json.dumps(dec, ensure_ascii=False).lower()
+        self.assertNotIn("hw-all", blob)
+
+
+class RealisticMutationTests(unittest.TestCase):
+    def _mutate_src(self, old, new):
+        with io.open(OPTIMIZE, encoding="utf-8") as _f:
+            src = _f.read()
+        self.assertIn(old, src)
+        return src.replace(old, new, 1)
+
+    def _load_mutated(self, old, new):
+        d = tempfile.mkdtemp(prefix="opt-mut-")
+        self.addCleanup(shutil.rmtree, d, ignore_errors=True)
+        path = os.path.join(d, "optimize_mutated.py")
+        with io.open(path, "w", encoding="utf-8", newline="\n") as f:
+            f.write(self._mutate_src(old, new))
+        spec = importlib.util.spec_from_file_location("optimize_mutated", path)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return mod
+
+    def _declared_run(self):
+        run = tmp_run(self)
+        write_policy_declared(run, "EM tung field",
+                              targets={"Ngay": {"metric": "accuracy", "target": 0.99},
+                                       "Gio bat dau": {"metric": "accuracy", "target": 0.99}})
+        write_realistic_eval(run, "round-01-baseline")
+        return run
+
+    def test_table_filter_bypass_detected(self):
+        run = self._declared_run()
+        real = {r["field"] for r in optimize.build_status(run)["rows"]}
+        self.assertEqual(real, {"Ngay", "Gio bat dau"})
+        mod = self._load_mutated(
+            'if rx and not re.search(rx, str(table.get("name") or "")):\n        return False',
+            'if False:  # mutation: bo loc bang -> dung ca ablation\n        return False')
+        mutated = {r["field"] for r in mod.build_status(run)["rows"]}
+        self.assertNotEqual(mutated, real)
+        self.assertTrue(any("hw/" in f for f in mutated))
+
+    def test_all_becomes_actionable_detected(self):
+        run = tmp_run(self)
+        write_policy_declared(run, "ablation", default_target=0.99)
+        write_realistic_eval(run, "round-01-baseline")
+        real = optimize.decide_next(run)
+        self.assertNotIn("hw-all", json.dumps(real, ensure_ascii=False).lower())
+        mod = self._load_mutated('return name == "all"', 'return False  # mutation')
+        mutated = mod.decide_next(run)
+        self.assertIn("hw-all", json.dumps(mutated, ensure_ascii=False).lower())
+
+    def test_missing_target_go_detected(self):
+        run = tmp_run(self)
+        write_policy_declared(run, "EM tung field")
+        write_realistic_eval(run, "round-01-baseline")
+        self.assertEqual(optimize.decide_next(run)["decision"], optimize.STOP_ASK)
+        mod = self._load_mutated("    if missing_target:",
+                                 "    if False:  # mutation: bo STOP thieu target")
+        # dot bien bo lop STOP: lop fail-closed thu hai (guard trong unmet)
+        # phai chan lai, khong duoc tra GO kem task khi thieu target
+        try:
+            mdec = mod.decide_next(run)
+        except Exception:
+            return
+        self.assertTrue(mdec.get("stop") or not mdec.get("tasks"),
+                        "mutation bo STOP thieu target lai sinh task: %s" % (mdec,))
+
+
 if __name__ == "__main__":
     unittest.main()

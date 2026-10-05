@@ -731,15 +731,21 @@ def _read_text_candidates(run_dir):
     return out
 
 
+def _fold_ascii(text):
+    s = str(text).replace("\u0111", "d").replace("\u0110", "D")
+    s = unicodedata.normalize("NFKD", s)
+    return s.encode("ascii", "ignore").decode("ascii").lower()
+
+
 def extract_default_target_from_texts(texts):
     """Trich target 'moi field >= NN%' ro rang tu spec/plan.
     Tra (value, snippet) hoac (None, None) khi khong ro -> khong doan."""
     pats = [
-        r"m[o\u00f4]i\s+(field|tr[\u01b0u][\u1edd\u00f2o]ng|c\u1ed9t)\s*>=?\s*(\d+(?:[.,]\d+)?)\s*%",
-        r"m[o\u00f4]i\s+(field|tr[\u01b0u][\u1edd\u00f2o]ng|c\u1ed9t)\s*[>=]\s*0[.,](\d+)",
+        r"moi\s+(field|truong|cot)\s*[>\u2265]=?\s*(\d+(?:[.,]\d+)?)\s*%",
+        r"moi\s+(field|truong|cot)\s*[>\u2265]\s*0[.,](\d+)",
     ]
     for fname, text in texts:
-        low = text.lower()
+        low = _fold_ascii(text)
         for pat in pats:
             m = re.search(pat, low)
             if m:
@@ -751,7 +757,7 @@ def extract_default_target_from_texts(texts):
                 if 0 < val <= 1.0:
                     i = max(0, m.start() - 20)
                     return val, "%s: ...%s..." % (
-                        fname, text[i:m.end() + 20].replace("\n", " ").strip())
+                        fname, low[i:m.end() + 20].replace("\n", " ").strip())
     return None, None
 
 
@@ -904,6 +910,9 @@ def decide_next(run_dir):
     unmet = []
     for f, h in actionable.items():
         t, _src = effective_target(policy, f)
+        if t is None:
+            raise OptimizeError("internal: field '%s' thieu target "
+                                "(phai STOP-hoi-nguoi truoc do)" % f)
         if _improvement(float(t), h["value"], h.get("direction", "higher")) > 0:
             unmet.append(f)
     if not unmet:
