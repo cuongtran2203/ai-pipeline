@@ -21,3 +21,15 @@ description: Mandatory execution rule for the AI pipeline - every deployment, te
 2. Dựng/dùng container, mount thư mục module + dữ liệu chỉ đọc; chạy lệnh qua `docker exec`; log image tag, lệnh, kết quả vào sổ (`notebook.py log`).
 3. Số đo hiệu năng (latency, v.v.) ghi rõ môi trường đo: container/host, giới hạn CPU/RAM (`--cpus`, `--memory`), vì container có thể khác CPU khách.
 4. Vi phạm đã xảy ra (đã cài/chạy ngoài sandbox) → báo ngay coordinator, ghi `--type error` vào sổ, gỡ phần đã cài nếu được phép; không giấu.
+
+## Hợp đồng launch huấn luyện (train/eval)
+
+Áp dụng cho mọi lần train/eval/benchmark; chi tiết vai trò ở `skills/ai-pipeline-module-dev/SKILL.md`. Không mâu thuẫn các quy tắc sandbox ở trên.
+
+1. **Snapshot commit bất biến:** lần chạy phải xuất phát từ một commit đã chốt (không chạy từ worktree đang sửa dở). Trước khi chạy ghi **commit SHA**; kết quả chỉ hợp lệ khi SHA có trong sổ và trong `eval.json`/`report.md` (+ `report.html`). Không có SHA ⇒ lần chạy **không tính là bằng chứng**.
+2. **Lệnh chạy cố định ghi trước khi chạy:** entrypoint/launcher + tham số nằm trong file đã commit (vd `train.sh`, cấu hình trong `config/`). Chạy đúng lệnh đó; **không chạy tay các biến thể ngoài launcher**. Muốn thử biến thể → sửa launcher/config, commit, rồi chạy lại (để lệnh chạy luôn truy được).
+3. **Log + exit code là bằng chứng duy nhất:** kết luận chỉ từ log thật, **exit code**, và artifact/checkpoint (kèm hash). **Không** kết luận từ `status` của dashboard/tracker, trạng thái tiến trình, hay trí nhớ. Log lưu trong run dir/artifact (đường dẫn tuyệt đối), không chỉ trên màn hình.
+4. **So sánh công bằng:** mỗi nhánh con chỉ đổi **MỘT yếu tố** so với nhánh tốt nhất hiện tại (baseline/winner); giữ nguyên seed, split, epoch, image/container. Đổi nhiều yếu tố cùng lúc ⇒ kết quả không quy được cho nguyên nhân.
+5. **Dừng nhánh sớm:** sau **~3 lần fail/OOM/lỗi liên tiếp** trên cùng một nhánh → dừng, chuyển sang chẩn đoán (`ai-pipeline-diagnose`) thay vì thử mò; ghi lý do dừng vào sổ.
+6. **Giới hạn tài nguyên + container:** mọi run trong container của mình (`aipipeline-<run>-*`) với giới hạn CPU/RAM/GPU khai báo theo task; không `--privileged`, không `--net=host`; image/container gắn version. Cần gói chưa có → `ask`, cài trong container.
+7. **Sổ:** mỗi run ghi `python scripts/notebook.py log <run_dir> --type experiment --title "..." --body "<commit SHA + lệnh + exit code + số đo chính>" --author module-dev`.
