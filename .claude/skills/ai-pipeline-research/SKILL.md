@@ -41,6 +41,55 @@ State: `runs/<id>/external_data/registry.json`. Mỗi entry:
 - `approve` chỉ do người; ghi **Decision** (approved_by/decided_by Person).
 - Ghi registry qua `statefile.update_json` (atomic, khoá) → hai register đồng thời không mất entry.
 
+## Quy trình tìm tài liệu có kỷ luật
+
+Dùng khi cần tìm **bài báo/tiền lệ (prior art)** cho một câu hỏi kỹ thuật (kiến trúc, loss, augmentation, mốc ceiling công khai, dataset) rồi mới kết luận — không quét vô hạn, không bịa nguồn.
+
+**Ngân sách vòng truy vấn** (theo độ khó câu hỏi; 1 vòng = một nhóm truy vấn tinh chỉnh dựa trên kết quả vòng trước):
+- Dễ (định nghĩa, 1 khái niệm): **0 vòng** bổ sung.
+- Trung bình (so sánh 2 phương án, 1 lĩnh vực): **1 vòng**.
+- Khó (nhiều lĩnh vực, chủ đề mới, nhiều nhánh): **2 vòng**.
+- **Trần 4 vòng mỗi lượt.** Hết ngân sách mà chưa đủ phủ → kết luận tạm kèm `chưa xác minh`, không quay vô hạn.
+
+**Chiến lược nhiều nguồn công khai** (chọn theo lĩnh vực; web search chung **chỉ là dự phòng** khi các nguồn dưới không trả gì):
+- arXiv/alphaXiv: CS/AI/ML, có toàn văn.
+- OpenAlex: liên ngành, đồ thị trích dẫn, metadata phong phú.
+- PubMed (NCBI E-utilities): y sinh.
+- bioRxiv: preprint sinh học (thường lần qua chỉ mục OpenAlex).
+Một vòng khó nên dùng ≥2 nguồn khác loại. Mỗi nguồn ghi rõ đã truy cập lúc nào và URL/DOI gốc.
+
+**Khử trùng lặp** đúng thứ tự: `id` (arXiv id/PMID/OpenAlex `W…`/DOI) → `DOI` chuẩn hoá (bỏ tiền tố `https://doi.org/`, lowercase) → **tiêu đề chuẩn hoá** (lowercase, bỏ dấu câu/khoảng trắng thừa). Bản trùng giữ bản đầy đủ metadata nhất và nguồn phát hiện đầu tiên.
+
+**Luật dừng sớm:** dừng thêm vòng khi ~3 kết quả mới liên tiếp không đổi kết luận, hoặc đã đủ phủ các nhánh (kiến trúc/dữ liệu/metric) của câu hỏi. Không kéo dài cho "đủ số".
+
+**Đọc sâu trước khi kết luận:** đọc kỹ **3–5 bài then chốt (load-bearing)** — bài trực tiếp đề xuất phương pháp, bài mới/dẫn nhiều — trước khi tổng hợp claim; xem figure/table của bài, không kết luận chỉ từ abstract.
+
+**Luật trích dẫn (bắt buộc):**
+- Mỗi claim có nguồn kèm **trích nguyên văn ngắn** (một câu/đoạn ngắn trong ngoặc kép) + **số trang hoặc số mục/bảng** + **URL/DOI** trỏ tới nguồn gốc (arXiv/doi.org/openalex.org/pubmed). Không có số trang (HTML/preprint) thì ghi rõ `không có số trang (HTML)`.
+- **Cấm bịa trích dẫn hoặc số liệu.** Không chắc → `chưa xác minh`. Chỉ dùng số đọc được từ nguồn, không suy từ trí nhớ.
+- **Không so sánh số vote của alphaXiv với số citation của OpenAlex** — hai hệ đo khác nhau; nếu cần độ phổ biến thì so *trong cùng một nguồn* và nói rõ.
+- Link trích dẫn trỏ tới nguồn gốc, không trỏ trang trung gian chưa kiểm chứng.
+
+**Từ bài báo lần ra dataset:**
+- Paper thường dẫn dataset qua: (a) repo/GitHub liên kết (mục "Code/Data availability"), (b) bảng dataset trong paper (tên, size, split, license nếu có), (c) URL trong tài liệu tham khảo.
+- Ứng viên dataset (tên, nguồn, license, size, domain) ghi vào `research/datasets.md`, **rồi** đăng ký provenance:
+  `python scripts/data_provenance.py register <run_dir> --card <card.json> --requested-by researcher`
+- `source_url` lấy từ bằng chứng paper/repo; đăng ký **không** thay cổng người duyệt (`approve`) hay `use-check` trước khi train.
+
+## Quyền riêng tư truy vấn
+
+- Truy vấn tìm tài liệu (kể cả web search) **rời máy tới bên thứ ba**. Truy vấn **CHỈ** được chứa từ khoá chủ đề chung (vd "handwritten digit recognition benchmark").
+- **KHÔNG** đưa vào truy vấn/URL: tên khách hàng hay dự án, nội dung dữ liệu có thể nhận dạng, tên file/thư mục nội bộ, mẫu dữ liệu, định danh (id) nhạy cảm, hay chi tiết chỉ có trong run. Không dán nguyên văn dữ liệu khách hàng vào truy vấn.
+- **Liệt kê mọi truy vấn đã dùng vào sổ** (kể cả truy vấn không ra kết quả):
+  `python scripts/notebook.py log <run_dir> --type research --title "Truy vấn tài liệu" --body "<nguồn + truy vấn + ngân sách vòng>" --author researcher`
+- Buộc phải tìm theo ngữ cảnh nhạy cảm → hỏi người (`ask`) trước, không tự gửi.
+
+## Nguồn ý tưởng
+
+- Quy trình trên (ngân sách vòng truy vấn, khử trùng `id → DOI → tiêu đề`, luật dừng sớm, đọc sâu 3–5 bài, luật trích dẫn, quyền riêng tư truy vấn) **tham chiếu ý tưởng** từ dự án mã nguồn mở `alphaXiv/OpenResearch`, commit `951700e`, skill `orx-lit-review`; giấy phép **MIT** (`LICENSE`).
+- Hợp đồng launch (xem `skills/ai-pipeline-sandbox/SKILL.md` và `skills/ai-pipeline-module-dev/SKILL.md`) tham chiếu thêm `orx-evidence` và `orx-experiment-tree`.
+- Đây là **bản viết lại bằng lời của ta**, không sao chép nguyên văn; ta dùng công cụ của mình (web/HTTP + `notebook.py` + `data_provenance.py`), **không cài và không gọi binary `orx`**.
+
 ## Khi nào DỪNG / KHÔNG làm
 - Không tải dữ liệu trước khi người duyệt.
 - Không đưa dữ liệu ngoài vào val/test.

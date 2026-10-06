@@ -17,6 +17,16 @@ description: Process for developing one AI model/module inside the pipeline work
 
 Done = checkpoint + dataset card + eval.json + both reports in the module directory.
 
+## Hợp đồng launch huấn luyện (train/eval)
+
+Đầy đủ ở `skills/ai-pipeline-sandbox/SKILL.md` §Hợp đồng launch; tóm tắt áp dụng cho module:
+
+1. Train/eval chạy từ **snapshot commit bất biến**; ghi **commit SHA** vào `eval.json`, `report.md`/`report.html` và sổ. Thiếu SHA ⇒ lần chạy không tính là bằng chứng.
+2. **Lệnh cố định ghi trước khi chạy** (launcher/config đã commit); không chạy tay biến thể ngoài launcher — biến thể nào cũng phải vào config rồi commit lại.
+3. **Log + exit code là bằng chứng duy nhất**: đọc log để kết luận, không tin `status`/trí nhớ; lưu log vào run dir/artifact.
+4. **So sánh công bằng:** mỗi biến thể chỉ đổi **một yếu tố** trên nhánh tốt nhất hiện tại; giữ nguyên seed/split/epoch/container.
+5. Sau **~3 fail liên tiếp** trên một nhánh → dừng, chẩn đoán (`ai-pipeline-diagnose`), không thử mò.
+6. Mỗi run ghi `python scripts/notebook.py log <run_dir> --type experiment ...` kèm commit SHA + lệnh + exit code + số đo chính.
 
 ## Seal test (nhãn test)
 - Data analyst tạo `runs/<id>/eval_manifest.json` bằng `scripts/seal.py manifest` (chỉ hash + đường dẫn tương đối, KHÔNG chứa nhãn); đặt nhãn ngoài checkout bằng `--labels-dir`/`SEAL_LABELS_ROOT`.
