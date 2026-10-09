@@ -13,7 +13,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from . import __version__, packs
+from . import __version__, packs, updater
 
 MANIFEST = ".ai-pipeline.json"
 BEGIN, END = "<!-- ai-pipeline:begin -->", "<!-- ai-pipeline:end -->"
@@ -28,7 +28,12 @@ ALIASES = {
 }
 
 
-def payload_dir():
+def payload_dir(src=None):
+    if src is not None:
+        src = Path(src)
+        if not ((src / "skills").is_dir() and (src / "AGENTS.md").is_file()):
+            sys.exit(f"ai-pipeline: {src} khong phai nguon ai-pipeline (thieu skills/ hoac AGENTS.md)")
+        return src
     here = Path(__file__).resolve().parent
     bundled = here / "payload"
     if (bundled / "skills").is_dir():
@@ -194,20 +199,21 @@ def setup_instructions(src_root, target, agent, a, log):
             log.warn.append("CLAUDE.md da co -> KHONG sua (Claude Code van thay skills trong .claude/skills).")
 
 
-def cmd_init(a, update=False):
+def cmd_init(a, update=False, src=None, version=None):
+    version = version or __version__
     target = Path(a.path).resolve()
     if not target.is_dir():
         if update:
             sys.exit(f"ai-pipeline: {target} khong ton tai")
         if not a.dry_run:
             target.mkdir(parents=True)
-    src = payload_dir()
+    src = payload_dir(src)
     manifest = load_manifest(target)
     if update and not manifest["version"]:
         sys.exit("ai-pipeline: chua init o day (khong co .ai-pipeline.json). Chay: ai-pipeline init")
     a.manifest = manifest
     log = Log(a.verbose)
-    print(f"{'Update' if update else 'Init'} ai-pipeline {__version__} -> {target}{' (dry-run)' if a.dry_run else ''}")
+    print(f"{'Update' if update else 'Init'} ai-pipeline {version} -> {target}{' (dry-run)' if a.dry_run else ''}")
     for d in COPY_DIRS:
         install_tree(src, target, d, manifest, a, update, log)
     if a.agent in ("claude", "both"):
@@ -220,7 +226,7 @@ def cmd_init(a, update=False):
     else:
         log.warn.append("De khong commit du lieu chay, them vao .gitignore: " + " ".join(GITIGNORE) + "  (hoac --gitignore)")
     if not a.dry_run:
-        manifest.update(version=__version__, agent=a.agent)
+        manifest.update(version=version, agent=a.agent)
         (target / MANIFEST).write_text(json.dumps(manifest, indent=2, sort_keys=True), encoding="utf-8")
     if not (target / ".git").exists():
         log.warn.append("Chua la git repo: worker song song can git. Chay `git init` + commit dau tien.")
@@ -235,6 +241,28 @@ def cmd_init(a, update=False):
         print("\nTiep theo:\n  1) ai-pipeline doctor\n  2) viet spec (templates/spec.template.md)\n"
               "  3) mo thu muc trong Claude Code / Codex va noi: Chay ai-pipeline voi spec <file>")
     return 0
+
+
+def cmd_update(a):
+    if a.offline:
+        return cmd_init(a, update=True)
+    repo = updater.resolve_repo(a.repo)
+    try:
+        ref = a.ref or updater.latest_tag(repo, a.pre)
+        if a.check:
+            if a.ref:
+                print(f"ai-pipeline hien tai {__version__}; ref ep buoc '{ref}' tu {repo} (--check khong clone)")
+            else:
+                note = "co ban moi" if updater.is_newer(ref, __version__) else "da la ban moi nhat"
+                print(f"ai-pipeline hien tai {__version__}; moi nhat {ref} ({note}) tu {repo}")
+            return 0
+        if not a.ref and not updater.is_newer(ref, __version__):
+            print(f"ai-pipeline {__version__} da la ban moi nhat (tag moi nhat: {ref}); khong ghi gi.")
+            return 0
+        with updater.fetched(repo, ref) as src:
+            return cmd_init(a, update=True, src=src, version=updater.read_version(src, ref))
+    except updater.UpdateError as e:
+        sys.exit(f"ai-pipeline: {e}")
 
 
 def cmd_uninstall(a):
@@ -374,8 +402,13 @@ def build_parser():
             sp.add_argument("-v", "--verbose", action="store_true")
 
     s = sub.add_parser("init", help="cai workflow vao du an"); common(s, True); s.set_defaults(fn=cmd_init)
-    s = sub.add_parser("update", help="nang cap file framework (giu file ban da sua)"); common(s, True)
-    s.set_defaults(fn=lambda a: cmd_init(a, update=True))
+    s = sub.add_parser("update", help="nang cap file framework tu git (giu file ban da sua)"); common(s, True)
+    s.add_argument("--repo", help="URL/duong dan repo nguon (mac dinh: " + updater.DEFAULT_REPO + " hoac env AI_PIPELINE_REPO)")
+    s.add_argument("--ref", help="ep branch/tag/commit thay vi tag on dinh moi nhat")
+    s.add_argument("--pre", action="store_true", help="tinh ca tag pre-release (.rc)")
+    s.add_argument("--check", action="store_true", help="chi in phien ban hien tai vs moi nhat, khong ghi gi")
+    s.add_argument("--offline", action="store_true", help="dung payload da cai trong package (hanh vi cu)")
+    s.set_defaults(fn=cmd_update)
     s = sub.add_parser("pack", help="cai/build pack tuy chon: graphify, obsidian")
     s.add_argument("action", choices=["list", "status", "install", "build", "uninstall"])
     s.add_argument("pack", nargs="?", choices=["graphify", "obsidian"])
