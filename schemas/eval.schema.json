@@ -169,6 +169,19 @@
         "type": "object",
         "properties": {"label": {"type": "string"}, "path": {"type": "string"}}
       }
+    },
+    "diagrams": {
+      "type": "array",
+      "description": "Sơ đồ pipeline/kiến trúc mô hình (tùy chọn; vẽ bằng skills/ai-pipeline-diagram, scripts/diagram.py). Thiếu thì renderer giữ hành vi cũ.",
+      "items": {
+        "type": "object",
+        "required": ["title", "svg"],
+        "properties": {
+          "title": {"type": "string", "description": "Tiêu đề sơ đồ."},
+          "svg": {"type": "string", "description": "Đường dẫn file .svg (report.html nhúng nội tuyến)."},
+          "excalidraw": {"type": "string", "description": "Đường dẫn file .excalidraw gốc (mở/sửa tay)."}
+        }
+      }
     }
   }
 }

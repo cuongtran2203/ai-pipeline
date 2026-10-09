@@ -193,7 +193,8 @@ flowchart LR
 
 | Lớp | Lệnh | Chức năng |
 |---|---|---|
-| Hook | `ai-pipeline hooks install\|status\|uninstall` | merge nhóm hook riêng vào `.claude/settings.json` (không đụng hook của bạn); `python scripts/pipeline_guard.py context write <run_dir>` cấp role/ownership theo task |
+| Hook | `python scripts/diagram.py render\|validate\|from-plan\|from-model` | sơ đồ Excalidraw/SVG cho report pipeline và kiến trúc mô hình (skill `ai-pipeline-diagram`) |
+| `ai-pipeline hooks install\|status\|uninstall` | merge nhóm hook riêng vào `.claude/settings.json` (không đụng hook của bạn); `python scripts/pipeline_guard.py context write <run_dir>` cấp role/ownership theo task |
 | Eval | `python scripts/evals.py run --static` / `--changed` / `--replay <transcript> --case ID` / `add-incident` | kiểm cấu hình agent; chấm hành vi theo event tool; sự cố thành case |
 | Giám sát | `python scripts/monitor.py record\|ingest\|check\|drift\|list\|dismiss\|resolve\|reconcile` | band theo hướng tốt/xấu, `min_n`, stale, PSI/KS; incident ghi vào đồ thị tri thức và sổ |
 
@@ -293,9 +294,9 @@ Tạo thư mục `skills/<tên-skill>/SKILL.md` rồi `ai-pipeline sync-skills` 
 
 ```
 .ai-pipeline/AGENTS.md   luật chung của workflow (hoặc đọc qua AGENTS.md của bạn)
-skills/                  22 skill: ai-pipeline, -intake, -analysis, -planning, -module-dev, -integration,
+skills/                  23 skill: ai-pipeline, -intake, -analysis, -planning, -module-dev, -integration,
                          -report, -orca, -status, -feasibility, -notebook, -graph, -agents, -sandbox,
-                         -diagnose, -knowledge, -autonomy, -hooks, -evals, -monitor, -optimize, -research
+                         -diagnose, -knowledge, -autonomy, -hooks, -evals, -monitor, -optimize, -research, -diagram
 .claude/skills/  .agents/skills/   bản sao cho Claude Code / Codex (theo --agent)
 roles/                   prompt role dùng chung cho 2 runtime
 templates/  schemas/     spec, report, playbook, autonomy policy; plan/eval/kg schema
