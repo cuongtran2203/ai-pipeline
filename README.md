@@ -92,7 +92,8 @@ Ví dụ thực tế: bài timesheet OCR có mục tiêu 99%/field vượt ceili
 | Tag | Runtime | Ghi chú |
 |---|---|---|
 | `1.0.0` | [Orca](https://github.com/stablyai/orca) | bản ổn định cuối dùng Orca (`git checkout 1.0.0`) |
-| `1.0.0.rc` | [Herdr](https://github.com/herdrdev/herdr) | release candidate: `plan_to_herdr.py`, `herdr_rt.py`, `worker_done.py`; đã chạy thật với herdr 0.9.3 + claude (`agent_roster.py probe claude` đạt); chạy `python scripts/herdr_rt.py verify` trên máy mới |
+| `1.1.0` | [Herdr](https://github.com/herdrdev/herdr) | bản ổn định dùng Herdr: `ai-pipeline update` lấy bản mới từ git, lưu 3 tài liệu HTML (dữ liệu/phương pháp/kết quả) sau mỗi round, cổng `require_round_docs`; chạy `python scripts/herdr_rt.py verify` trên máy mới |
+| `1.0.0.rc` | [Herdr](https://github.com/herdrdev/herdr) | release candidate (đã được `1.1.0` thay thế): `plan_to_herdr.py`, `herdr_rt.py`, `worker_done.py`; đã chạy thật với herdr 0.9.3 + claude (`agent_roster.py probe claude` đạt); chạy `python scripts/herdr_rt.py verify` trên máy mới |
 
 Khác biệt chính: Herdr không có task DAG/`worker_done`/`ask` nên run, task, worker_done và ask là file trong `runs/<id>/` (`tasks/`, `workers/`, `worker_done/`, `asks/`); mỗi worker chạy trong tab/pane riêng + git worktree riêng; không còn auto-release (dùng `worker-release`).
 
