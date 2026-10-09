@@ -254,7 +254,7 @@ Tính chất: chạy lại `init` nhiều lần cho kết quả giống nhau (id
 | Lệnh | Việc |
 |---|---|
 | `ai-pipeline init [path] [--agent claude\|codex\|both] [--link] [--gitignore] [--force] [--dry-run] [-v]` | cài workflow vào project |
-| `ai-pipeline update [path]` | nâng cấp file framework. File bạn đã sửa được giữ nguyên, bản mới ghi ra `<file>.new` để tự merge |
+| `ai-pipeline update [path] [--check] [--pre] [--ref REF] [--repo URL] [--offline] [--dry-run]` | lấy **bản mới nhất từ git** (tag stable mới nhất, bỏ `.rc`) rồi nâng cấp file framework. File bạn đã sửa được giữ nguyên, bản mới ghi ra `<file>.new` để tự merge |
 | `ai-pipeline uninstall [path] [--dry-run]` | gỡ các file đã cài mà bạn chưa sửa; file của bạn và `runs/` không bị đụng |
 | `ai-pipeline doctor [path]` | kiểm tra python/git/orca/claude/codex/docker, bản cài, skills mirror |
 | `ai-pipeline new-run <tên> <spec.md>` | tạo `runs/<tên>/` từ spec |
@@ -265,6 +265,15 @@ Tính chất: chạy lại `init` nhiều lần cho kết quả giống nhau (id
 | `ai-pipeline hooks install\|status\|uninstall` | cài/gỡ hook cưỡng chế (merge, không đè settings) |
 | `ai-pipeline pack list\|status\|install\|build\|uninstall [graphify\|obsidian] [--yes]` | cài/build pack tuỳ chọn (xem mục Pack) |
 | `ai-pipeline run <script> [args]` | chạy bất kỳ `scripts/<script>.py`; alias: `notebook kg agents diagram cleanup autonomy supervisor seal vault sync-skills` |
+
+### `ai-pipeline update` lấy bản mới từ git
+
+- Mặc định: `git ls-remote --tags` tìm tag stable mới nhất (semver, bỏ tag có hậu tố như `.rc`), clone nông vào thư mục tạm, kiểm tra có `skills/` + `AGENTS.md`, rồi áp dụng bằng đúng logic update cũ (giữ file bạn đã sửa, ghi `.new` khi xung đột). Chỉ sao chép file: không `pip install`, không chạy code của repo tải về.
+- Repo nguồn: mặc định `https://github.com/cuongtran2203/ai-pipeline.git`; ghi đè bằng `--repo URL` hoặc biến môi trường `AI_PIPELINE_REPO`.
+- `--pre` tính cả pre-release; `--ref REF` ép branch/tag/commit (không theo `main`).
+- `--check` chỉ in phiên bản hiện tại so với mới nhất, không ghi gì. Đã là bản mới nhất thì báo và không ghi gì.
+- `--offline` dùng payload đã cài trong package như trước (không cần git/mạng). `--dry-run` vẫn hoạt động.
+- Thiếu `git`, mất mạng hoặc ref không tồn tại: báo lỗi rõ ràng, exit khác 0, không để lại thư mục tạm; manifest chỉ ghi sau khi cài xong.
 
 Các lệnh `status/validate/plan/...` chỉ gọi script tương ứng trong `scripts/` của project, nên chạy ở thư mục project (hoặc `--path`).
 
