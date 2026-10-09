@@ -118,7 +118,7 @@ def main():
             git("tag", "-f", f"archive/{b}", b, check=True)
             print(f"    tagged archive/{b}")
         wt = worktrees().get(b)
-        if wt and os.path.abspath(wt) != os.path.abspath(ROOT):
+        if wt and os.path.realpath(wt) != os.path.realpath(ROOT):  # realpath: macOS /tmp -> /private/tmp
             rm = git("worktree", "remove", wt)  # no --force: refuses a dirty worktree
             if rm.returncode:
                 print(f"    worktree remove failed, branch kept: {(rm.stderr or rm.stdout).strip()[:200]}")

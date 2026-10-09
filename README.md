@@ -229,7 +229,7 @@ git clone https://github.com/cuongtran2203/ai-pipeline && cd ai-pipeline
 python -m ai_pipeline --help
 ```
 
-Để chạy worker song song cần thêm: [Herdr](https://github.com/herdrdev/herdr) và ít nhất một trong `claude` (Claude Code) / `codex`. Docker là tuỳ chọn (sandbox). `ai-pipeline doctor` kiểm tra tất cả.
+Để chạy worker song song cần thêm: [Herdr](https://github.com/herdrdev/herdr) (macOS/Linux: `curl -fsSL https://herdr.dev/install.sh | sh` hoặc `brew install herdr`; Windows: bộ cài standalone, thêm thư mục chứa `herdr.exe` vào PATH hoặc đặt `HERDR_CLI_COMMAND`; khởi động `herdr` một lần để có session). Trên macOS/Linux thường chỉ có `python3`: script tự dùng `python3` trong prompt worker và ít nhất một trong `claude` (Claude Code) / `codex`. Docker là tuỳ chọn (sandbox). `ai-pipeline doctor` kiểm tra tất cả.
 
 ## Bắt đầu nhanh
 

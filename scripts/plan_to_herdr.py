@@ -312,8 +312,8 @@ def build_spec(plan, t, run_dir):
         "Constraints: " + "; ".join(t.get("constraints", []) + [
             "all dataset/model artifacts must carry a version tag",
             f"reports for the user are written in {'Vietnamese' if lang == 'vi' else 'English'} (run report_lang={lang})",
-            "ask the coordinator (python scripts/worker_done.py <run_dir> ask --task <id> --question ...) instead of guessing when blocked on a human decision",
-            f"log each experiment/finding to the problem notebook: python scripts/notebook.py log {run_dir} --type experiment|research|error|insight --title ... --body ... --author {role} (hypothesis, setup, metrics, conclusion; see skills/ai-pipeline-notebook)",
+            f"ask the coordinator ({herdr_rt.py()} scripts/worker_done.py <run_dir> ask --task <id> --question ...) instead of guessing when blocked on a human decision",
+            f"log each experiment/finding to the problem notebook: {herdr_rt.py()} scripts/notebook.py log {run_dir} --type experiment|research|error|insight --title ... --body ... --author {role} (hypothesis, setup, metrics, conclusion; see skills/ai-pipeline-notebook)",
         ]),
         "Ownership: you may edit only " + ", ".join(t.get("owns", [f"{run_dir}/artifacts/{t['id']}/"])),
         "Inputs: " + (", ".join(t.get("inputs", [])) or "none"),
@@ -322,7 +322,7 @@ def build_spec(plan, t, run_dir):
         *(["Worktree: you run in your OWN git worktree/branch. Commit code changes there (small commits); write artifacts, "
            "eval.json and reports to the absolute run dir above so others can read them. Never edit another task's paths; "
            "the integrator merges branches."] if isolated else []),
-        "Finish with worker_done (python scripts/worker_done.py <run_dir> done --task <id> --outcome succeeded|failed --report-path <main output>).",
+        f"Finish with worker_done ({herdr_rt.py()} scripts/worker_done.py <run_dir> done --task <id> --outcome succeeded|failed --report-path <main output>).",
     ]
     return "\n".join(lines)
 

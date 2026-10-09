@@ -22,6 +22,7 @@ import glob
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -50,6 +51,16 @@ AGENT_KINDS = {"pi", "claude", "codex", "gemini", "cursor", "devin", "agy", "cli
                "copilot", "kimi", "kiro", "droid", "amp", "grok", "hermes", "kilo", "qodercli", "qwen", "letta", "maki", "muse"}
 AGENT_CMD = {"claude": "claude", "codex": "codex", "pi": "pi", "opencode": "opencode", "cursor": "cursor-agent",
              "gemini": "gemini", "kimi": "kimi", "qwen": "qwen"}
+
+
+def py():
+    """Lenh Python cho prompt worker: macOS/Linux thuong chi co python3."""
+    return "python" if shutil.which("python") else "python3"
+
+
+def q(path):
+    """Quote duong dan cho shell cua pane (POSIX hoac PowerShell/cmd)."""
+    return f'"{path}"' if os.name == "nt" else shlex.quote(path)
 
 
 def require_herdr():
@@ -172,7 +183,7 @@ def worker_start(run_dir, run_id, task_id, worktree, name, agent, model, effort)
     pdir = os.path.join(run_dir, "workers")
     prompt = os.path.join(pdir, disp + ".prompt.md")
     os.makedirs(pdir, exist_ok=True)
-    done_cmd = (f"python {ROOT}/scripts/worker_done.py {os.path.abspath(run_dir)}")
+    done_cmd = f"{py()} {q(os.path.join(ROOT, 'scripts', 'worker_done.py'))} {q(os.path.abspath(run_dir))}"
     footer = (f"\n\n[Herdr protocol] Task id: {task['id']}. Khi xong chay: {done_cmd} done --task {task_id} "
               f"--outcome succeeded|failed --report-path <output chinh> --summary '<1-3 cau>'. "
               f"Can quyet dinh cua nguoi: {done_cmd} ask --task {task_id} --question '<cau hoi>' roi DUNG va doi tra loi trong pane "

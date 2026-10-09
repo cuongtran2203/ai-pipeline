@@ -44,8 +44,12 @@ def main():
     pf = os.path.join(out, "prompt.txt")
     open(pf, "w", encoding="utf-8").write(spec)
     log = os.path.join(out, "headless.log")
-    cmd = (f"command-code -p (Get-Content -Raw -Encoding UTF8 '{pf}') --trust --no-session --accept-edits "
-           f"--max-turns {a.max_turns} *> '{log}'")
+    if os.name == "nt":  # PowerShell
+        cmd = (f"command-code -p (Get-Content -Raw -Encoding UTF8 '{pf}') --trust --no-session --accept-edits "
+               f"--max-turns {a.max_turns} *> '{log}'")
+    else:  # macOS / Linux (sh)
+        cmd = (f"command-code -p \"$(cat '{pf}')\" --trust --no-session --accept-edits "
+               f"--max-turns {a.max_turns} > '{log}' 2>&1")
     import herdr_rt
     herdr_rt.require_herdr()
     rc, out, err = herdr_rt.herdr(*herdr_rt.HERDR_CMDS["tab_create"], "--label", f"{a.task_id}-command-code-headless", "--cwd", os.getcwd(), "--no-focus")

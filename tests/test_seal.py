@@ -128,8 +128,11 @@ class SealTest(unittest.TestCase):
     def test_manifest_does_not_leak_absolute_outside_path(self):
         with open(os.path.join(self.run_dir, "eval_manifest.json"), encoding="utf-8") as f:
             raw = f.read()
-        self.assertNotIn(self.dir, raw)
-        self.assertNotIn(self.dir.replace("\\", "/"), raw)
+        # Khong gia tri chuoi nao la duong dan tuyet doi. (Ref tuong doi nhu ../../tmp/x co the chua
+        # nguyen chuoi self.dir tren Linux/macOS nen khong dung assertNotIn tren raw.)
+        for v in json.loads(raw).values():
+            if isinstance(v, str):
+                self.assertFalse(os.path.isabs(v) or v.startswith("/") or ":\\" in v, v)
         self.assertFalse(os.path.isabs(self.manifest["labels_path"]))
         self.assertFalse(os.path.isabs(self.manifest["labels_root"]))
 
