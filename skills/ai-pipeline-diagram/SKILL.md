@@ -53,6 +53,9 @@ Dùng khi: report/tài liệu nói về **pipeline** (luồng task, luồng dữ
   trỏ shape (ràng buộc hai chiều). Mọi chữ trong sơ đồ đều phải có container.
 - **Mũi tên vuông góc**: `elbowed:true, roughness:0, roundness:null`; điểm đầu/cuối nằm
   ĐÚNG trên mép hộp tại điểm giữa cạnh (top/bottom/left/right), dung sai 1px.
+  Từ `diagram-v0.2`: mũi tên là đường gấp khúc nhiều đoạn đi trong **kênh**
+  (khe giữa các cột/tầng), KHÔNG đoạn nào cắt hộp của node không phải đầu/cuối;
+  các cạnh cùng đích gộp chung đường bus vào với điểm rẽ nhánh (chấm tròn trong SVG).
 - **Bảng màu semantic** (`nền/viền`): API/entrypoint `#e7f5ff/#1971c2`,
   service/logic `#ebfbee/#2f9e44`, DB/storage `#fff9db/#f08c00`,
   queue/cache/async `#f3f0ff/#7950f2`, AI model/inference `#fff0f6/#d6336c`,
@@ -60,13 +63,24 @@ Dùng khi: report/tài liệu nói về **pipeline** (luồng task, luồng dữ
   training job (nhóm AI), evaluation/metric (nhóm entrypoint), human gate (nhóm gate, nét đứt),
   artifact/report (nhóm storage), external data `#f1f3f5/#868e96`.
 - Chữ tiếng Việt có dấu phải nguyên vẹn trong SVG (UTF-8, escape XML, không font ngoài).
+- **Hộp tự giãn theo nhãn** (tối đa 340px rồi xuống dòng, không bao giờ cắt chữ;
+  đo rộng đúng cho CJK so với Latin); chữ nhãn/cạnh ≥12px ở kích cỡ mặc định.
+  **viewBox khít** nội dung + lề đều 24px (chỉ SVG; Excalidraw giữ tọa độ gốc).
+- **Validate hình học** (ngoài quy tắc cũ): bắt `xuyen hop` (mũi tên cắt hộp lạ),
+  `chong` (hai hộp chồng nhau), `tran` (chữ tràn khỏi hộp chứa / nhãn cạnh xa đường).
+- Sơ đồ >25 node → tách **theo phase** (mỗi phase ≤25, phase lớn chẻ tiếp theo topo)
+  + 1 **sơ đồ tổng quan** (`_overview`, mỗi phase là 1 hộp); cạnh liên phần liệt kê
+  ở legend + console. SVG có băng màu + tên phase và hộp chú thích dưới nội dung.
 
 ## Các bẫy thường gặp
 
 - Vẽ diamond cho "đạt mục tiêu?" → `validate` báo lỗi; đổi kind thành `decision`/`human-gate`.
 - Text mất `containerId` sau khi sửa tay → chạy `validate`, render lại từ spec thay vì vá JSON.
 - Mũi tên lệch mép hộp dù chỉ 2px → `validate` báo lỗi; render lại từ spec (tọa độ do máy tính).
-- Sơ đồ >25 node → công cụ tự tách `_p1, _p2...`, cạnh liên phần liệt kê ở legend + console.
+- Sơ đồ >25 node → công cụ tự tách `_p1, _p2...` **theo phase + `_overview` tổng quan**,
+  cạnh liên phần liệt kê ở legend + console (xem Quy tắc cứng).
+- Mũi tên trong SVG là đường gấp khúc qua kênh + chấm tròn ở điểm rẽ nhánh gộp;
+  trong Excalidraw là arrow nhiều điểm `elbowed` (điểm đầu/cuối vẫn đúng mép giữa).
 - Mở `.excalidraw.md` thấy JSON thô thay vì canvas → Obsidian thiếu/sai plugin, hoặc khối
   `# Drawing` bị sửa tay (render lại, không sửa khối đó).
 
