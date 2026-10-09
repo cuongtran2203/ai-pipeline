@@ -38,6 +38,8 @@ STR = {
         "fixes_intro": "Giải pháp theo thứ tự ưu tiên (mức ưu tiên → nhóm lỗi → cần làm gì → cách kiểm chứng):",
         "recommend": "Đề xuất dùng checkpoint/cấu hình mới",
         "artifacts": "Artifact kiểm chứng",
+        "diagrams": "Sơ đồ",
+        "diagrams_intro": "Sơ đồ pipeline / kiến trúc mô hình (SVG nhúng nội tuyến; file .excalidraw mở được để sửa tay).",
         "nosamples": "mẫu số: N/A",
         "nodirect": "không so sánh trực tiếp",
         "unit": "Đơn vị", "split": "Chia dữ liệu", "metrics": "Metric (hướng tốt)",
@@ -65,6 +67,8 @@ STR = {
         "fixes_intro": "Fixes in priority order (priority → error group → action → verification):",
         "recommend": "Recommendation on new checkpoint/config",
         "artifacts": "Verification artifacts",
+        "diagrams": "Diagrams",
+        "diagrams_intro": "Pipeline / model architecture diagrams (inline SVG; .excalidraw source editable by hand).",
         "nosamples": "denominator: N/A",
         "nodirect": "not directly comparable",
         "unit": "Unit", "split": "Split", "metrics": "Metrics (better direction)",
@@ -163,6 +167,34 @@ def _contract_lines(ec, S):
     return out
 
 
+def _diagram_links(d):
+    """Danh sach lien ket markdown toi file so do (report.md)."""
+    out = []
+    for g in d.get("diagrams") or []:
+        link = f"[{md_cell(g['title'])}]({g['svg']})"
+        if g.get("excalidraw"):
+            link += f" ([nguồn]({g['excalidraw']}))"
+        out.append(f"- {link}\n")
+    return out
+
+
+def _diagram_svgs(d):
+    """SVG nhung noi tuyen (report.html). Thieu file thi giu lien ket chu."""
+    out = []
+    for g in d.get("diagrams") or []:
+        svg_raw = None
+        try:
+            with open(g["svg"], encoding="utf-8") as f:
+                svg_raw = f.read()
+        except (OSError, UnicodeDecodeError):
+            svg_raw = None
+        if svg_raw and "<svg" in svg_raw:
+            out.append(f'<figure><figcaption>{html.escape(g["title"])}</figcaption>{svg_raw}</figure>')
+        else:
+            out.append(f'<p>Sơ đồ: {html.escape(g["title"])} ({html.escape(g["svg"])})</p>')
+    return out
+
+
 def render_md(d, lang=None):
     """Template: 1 Tổng quan · 2 Nội dung chi tiết (bảng metric + lỗi theo nhóm) · 3 Kết luận. Markdown only."""
     lang = d.get("lang") or lang or "vi"
@@ -224,6 +256,8 @@ def render_md(d, lang=None):
         md.append("\n" + bullet(S["recommend"], c["recommend"]))
     if d.get("artifacts"):
         md.append("\n" + S["artifacts"] + ": " + "; ".join(f"[{a['label']}]({a['path']})" for a in d["artifacts"]) + "\n")
+    if d.get("diagrams"):
+        md.append(f"\n### {S['diagrams']}\n{S['diagrams_intro']}\n\n" + "".join(_diagram_links(d)))
     return "".join(md)
 
 
@@ -249,6 +283,11 @@ def render_html(d, lang=None):
     else:
         dist = f'<h2>Phân bố nhóm lỗi (0)</h2><p>{e_(EMPTY_ERRORS_MSG[lang if lang in EMPTY_ERRORS_MSG else "vi"])}</p>'
         detail = ""
+    if d.get("diagrams"):
+        S = STR.get(lang, STR["vi"])
+        diagrams = f"<h2>{e_(S['diagrams'])}</h2><p>{e_(S['diagrams_intro'])}</p>" + "".join(_diagram_svgs(d))
+    else:
+        diagrams = ""
     return f"""<!doctype html><html lang="{lang}"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>{e_(d['title'])} — lỗi theo cụm</title>
 <style>:root{{--bg:#fff;--fg:#1a1a1a;--mut:#666;--ac:#2563eb;--card:#f5f6f8}}
@@ -257,9 +296,9 @@ body{{font:15px/1.5 system-ui,sans-serif;background:var(--bg);color:var(--fg);ma
 .bar{{display:grid;grid-template-columns:220px 1fr 40px;gap:8px;align-items:center;color:inherit;text-decoration:none;margin:4px 0}}
 .bar i{{display:block;height:14px;background:var(--ac);border-radius:3px}}
 section{{background:var(--card);border-radius:8px;padding:4px 16px;margin:16px 0}}small{{color:var(--mut)}}
-img{{max-width:100%;border-radius:4px}}</style></head><body>
+img{{max-width:100%;border-radius:4px}}figure svg{{max-width:100%;height:auto}}figcaption{{font-weight:600}}</style></head><body>
 <h1>{e_(d['title'])}</h1><p>Model <code>{e_(d.get('version',{}).get('model','?'))}</code> · Dataset <code>{e_(d.get('version',{}).get('dataset','?'))}</code></p>
-{dist}{detail}</body></html>"""
+{dist}{detail}{diagrams}</body></html>"""
 
 
 def main():

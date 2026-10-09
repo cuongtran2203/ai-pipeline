@@ -17,6 +17,7 @@ Làm theo `skills/ai-pipeline-module-dev/SKILL.md`: hiểu bài toán → datase
 - Eval: bộ val real riêng nếu có; kết quả ghi vào `eval.json` (schema ở `examples/eval.sample.json`).
 - **Seal nhãn test**: chỉ dùng train/val; CẤM đọc/ghi log chứa nhãn test và cấm tự mở nhãn test. Chấm trên test chỉ do integrator thực hiện MỘT lượt qua `python scripts/seal.py grant` sau khi recipe (model version + threshold) đã khoá; mở lại bị đánh dấu `exploratory`.
 - Sau mỗi lần đánh giá: `python scripts/render_report.py eval.json --out-dir <thư mục module>`.
+- Module có model: vẽ **sơ đồ kiến trúc** từ spec khối (`templates/model_spec.example.json`) bằng `python scripts/diagram.py from-model model_spec.json --out <thư mục module>/diagrams` + `python scripts/diagram.py validate`, rồi khai `diagrams` trong `eval.json` để nhúng vào report module (skill `ai-pipeline-diagram`).
 
 - Bạn chạy trong worktree/branch riêng: commit code ở đó; ghi `eval.json`, report, artifact vào run dir tuyệt đối trong task spec.
 
