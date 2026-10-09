@@ -50,13 +50,13 @@ G1 G2 G3 la bat buoc. Chay trong sandbox. Sau moi round ghi report.md va report.
 Chay `python scripts/demo.py show` de xem.
 """
 
-ORCA_SKILL = """\
+HERDR_SKILL = """\
 ---
-name: ai-pipeline-orca
-description: orca runtime demo cho eval
+name: ai-pipeline-herdr
+description: herdr runtime demo cho eval
 ---
 
-# Orca
+# Herdr
 
 Gate G2 G3. Moi worker chay trong worktree rieng.
 Chay `python scripts/demo.py show`.
@@ -67,9 +67,9 @@ def make_repo(base):
     """Tạo repo tối thiểu hợp lệ; trả về Path gốc."""
     root = Path(base)
     (root / "skills" / "ai-pipeline").mkdir(parents=True)
-    (root / "skills" / "ai-pipeline-orca").mkdir(parents=True)
+    (root / "skills" / "ai-pipeline-herdr").mkdir(parents=True)
     (root / "skills" / "ai-pipeline" / "SKILL.md").write_text(PIPELINE_SKILL, encoding="utf-8")
-    (root / "skills" / "ai-pipeline-orca" / "SKILL.md").write_text(ORCA_SKILL, encoding="utf-8")
+    (root / "skills" / "ai-pipeline-herdr" / "SKILL.md").write_text(HERDR_SKILL, encoding="utf-8")
     (root / "roles").mkdir()
     (root / "roles" / "registry.json").write_text(
         json.dumps({"roles": {"architect": {"group": "debate"}}}, ensure_ascii=False),
@@ -87,7 +87,7 @@ def make_repo(base):
     # mirror đồng bộ
     for mirror in (".claude/skills", ".agents/skills"):
         (root / mirror).mkdir(parents=True)
-        for skill in ("ai-pipeline", "ai-pipeline-orca"):
+        for skill in ("ai-pipeline", "ai-pipeline-herdr"):
             shutil.copytree(root / "skills" / skill, root / mirror / skill)
     return root
 

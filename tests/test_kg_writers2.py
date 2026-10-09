@@ -207,12 +207,12 @@ class SettleTaskTransactionalTests(TempRun):
              "deps": ["G2"]},
         ])
         with open(os.path.join(self.run, "task_map.json"), "w", encoding="utf-8") as f:
-            json.dump({"T1": "orca-t1"}, f)
+            json.dump({"T1": "task-t1"}, f)
 
     def test_settle_twice_is_idempotent(self):
         self._plan()
         for _ in range(2):
-            r = run_cli("settle_task.py", self.run, "orca-t1")
+            r = run_cli("settle_task.py", self.run, "task-t1")
             self.assertEqual(r.returncode, 0, r.stderr)
         done = read_json_file(os.path.join(self.run, "done.json"))
         self.assertEqual(done.count("T1"), 1, done)
@@ -227,7 +227,7 @@ class SettleTaskTransactionalTests(TempRun):
 
         settle_task.kg.add_edge_checked = boom
         try:
-            settle_task.settle(self.run, "orca-t1")
+            settle_task.settle(self.run, "task-t1")
         finally:
             settle_task.kg.add_edge_checked = original
 
@@ -247,7 +247,7 @@ class SettleTaskTransactionalTests(TempRun):
         self._plan()
         with open(os.path.join(self.run, "done.json"), "w", encoding="utf-8") as f:
             json.dump({"T1": True}, f)
-        r = run_cli("settle_task.py", self.run, "orca-t1")
+        r = run_cli("settle_task.py", self.run, "task-t1")
         self.assertNotEqual(r.returncode, 0)
         with open(os.path.join(self.run, "done.json"), encoding="utf-8") as f:
             self.assertEqual(json.load(f), {"T1": True})

@@ -14,7 +14,7 @@ Per branch, in order (never destroys work):
      (history stays reachable), remove worktree, delete branch.
   3. ahead > 0 with files that exist nowhere on disk: tracked, non-ignored new paths -> `git merge --no-ff` (aborted on conflict);
      ignored paths (runs/**) -> restored from the branch into the working dir; then step 2.
-Never uses --force on `orca worktree rm`; refuses on a dirty worktree, a missing done.json entry, or a dirty master (for merges).
+Never uses --force on `git worktree remove`; refuses on a dirty worktree, a missing done.json entry, or a dirty master (for merges).
 """
 import argparse
 import json
@@ -25,7 +25,6 @@ import sys
 sys.stdout.reconfigure(encoding="utf-8")
 sys.stderr.reconfigure(encoding="utf-8")
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-ORCA = os.environ.get("ORCA_CLI_COMMAND") or ("orca-dev" if os.environ.get("ORCA_DEV_REPO_ROOT") else "orca")
 
 
 def git(*args, cwd=ROOT, check=False):
@@ -118,13 +117,12 @@ def main():
         if ahead and not plain_missing:
             git("tag", "-f", f"archive/{b}", b, check=True)
             print(f"    tagged archive/{b}")
-        rm = subprocess.run([ORCA, "worktree", "rm", "--worktree", f"branch:{b}", "--json"], capture_output=True, text=True, encoding="utf-8")
-        if '"ok": true' not in rm.stdout:
-            print(f"    worktree rm failed, branch kept: {(rm.stdout or rm.stderr).strip()[:200]}")
-            continue
-        if not git("branch", "--list", b).stdout.strip():  # `orca worktree rm` already removed the branch
-            print("    worktree removed, branch deleted")
-            continue
+        wt = worktrees().get(b)
+        if wt and os.path.abspath(wt) != os.path.abspath(ROOT):
+            rm = git("worktree", "remove", wt)  # no --force: refuses a dirty worktree
+            if rm.returncode:
+                print(f"    worktree remove failed, branch kept: {(rm.stderr or rm.stdout).strip()[:200]}")
+                continue
         d = git("branch", "-d", b)
         if d.returncode:
             d = git("branch", "-D", b) if git("tag", "--list", f"archive/{b}").stdout.strip() else d

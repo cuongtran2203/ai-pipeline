@@ -8,7 +8,7 @@ description: Mandatory execution rule for the AI pipeline - every deployment, te
 ## Quy tắc (bắt buộc)
 1. **Mọi việc triển khai, kiểm thử, benchmark, huấn luyện, export model đều chạy trong 1 sandbox container**: mặc định trên server (container tên `aipipeline-<run>-*`, xem architecture §môi trường train). Chỉ tạo container **trên máy local khi người dùng cho phép rõ ràng** (ghi vào `decisions.md`).
    Tài nguyên khai báo theo task (`plan.json` `mode` + `resources.compute`): task needs_g3 (`mode: train` hoặc `compute: gpu`) mới cần G3/GPU; các task còn lại (`evaluate-only | retrieve-only | inference-service | monitor` với `compute: cpu`) chạy container CPU thường, không chờ G3.
-2. **Không tự ý cài đặt thư viện** (pip/conda/npm/apt, tải wheel/model, `pip install` vào Python hệ thống/host). Cần gói nào → liệt kê (tên, phiên bản, lý do, nguồn) và hỏi người bằng Orca `ask`; chỉ cài sau khi được đồng ý, và **chỉ cài vào trong container**, không cài vào host.
+2. **Không tự ý cài đặt thư viện** (pip/conda/npm/apt, tải wheel/model, `pip install` vào Python hệ thống/host). Cần gói nào → liệt kê (tên, phiên bản, lý do, nguồn) và hỏi người bằng Herdr `ask`; chỉ cài sau khi được đồng ý, và **chỉ cài vào trong container**, không cài vào host.
 3. Ghi mọi gói đã được phép vào `requirements.lock`/`environment.md` của module (tên==phiên bản, image tag) để tái lập; image/container gắn version (vd. `env-v0.1`).
 4. Không động tới container/tiến trình không phải của mình; không `--privileged`, `--net=host`, `docker system prune`.
 5. Cho phép trên host: đọc file, phân tích tĩnh, chạy các script **đã có sẵn** bằng thư viện **đã có sẵn** chỉ khi người đã cho phép chạy local (ghi vào `decisions.md`). Không có phép → ask.

@@ -11,7 +11,7 @@ người chỉ giám sát qua cảnh báo và can thiệp khi lệch chính sác
 ai-pipeline mặc định **bounded_auto + gate**: gate G1/G2/G3 vẫn bắt buộc, còn lại tự chạy tới khi chạm trần.
 
 ## Live supervision (read-only)
-`python scripts/orca_snapshot.py runs/<id> --out runs/<id>/workers.json` turns Orca's `worker-list` into the snapshot the supervisor reads (live workers, last agent-status time, failed ones; a failed dispatch already replaced by a retry is skipped), then `python scripts/supervisor.py runs/<id> --workers runs/<id>/workers.json`. Run both at each coordinator checkpoint (after every wait) and before starting a wave. Neither command starts, stops, retries or releases anything.
+`python scripts/herdr_snapshot.py runs/<id> --out runs/<id>/workers.json` turns Herdr agent status (`herdr agent get`) + `worker_done/` into the snapshot the supervisor reads (live workers, last agent-status time, failed ones; a failed dispatch already replaced by a retry is skipped), then `python scripts/supervisor.py runs/<id> --workers runs/<id>/workers.json`. Run both at each coordinator checkpoint (after every wait) and before starting a wave. Neither command starts, stops, retries or releases anything.
 
 ## 1. Policy theo run (`autonomy_policy.json`)
 
@@ -35,10 +35,10 @@ python scripts/autonomy.py check runs/<id> --action start --phase build --task M
 python scripts/autonomy.py approve runs/<id> --scope M1 --decision approve --reason "..."
 ```
 
-`check` exit 0 = được phép, 2 = bị cấm (lý do in ra). `plan_to_orca.py --start-ready`
+`check` exit 0 = được phép, 2 = bị cấm (lý do in ra). `plan_to_herdr.py --start-ready`
 giữ quota theo từng worker qua `runs/<id>/admission.json` (trạng thái theo task ID
 `reserved → starting → started | failed`, ghi qua `statefile`):
-mỗi worker được check cap + reserve trong một khóa ngắn **ngay trước** lời gọi Orca
+mỗi worker được check cap + reserve trong một khóa ngắn **ngay trước** lời gọi Herdr
 (hai coordinator không cùng nhận quota), ghi `starting` trước call, có receipt thì
 chuyển `started` kèm dispatchId, lỗi rõ ràng thì `failed` (giải phóng quota),
 lỗi không rõ (mất receipt) thì GIỮ `starting` và phải `--reconcile` trước khi retry
@@ -76,7 +76,7 @@ python scripts/supervisor.py runs/<id> --workers workers.json   # snapshot worke
 ```
 
 Phát hiện: worker im lặng quá `stale_worker_minutes`, gần/vượt cap, worker failed.
-In cảnh báo cô đọng + gợi ý hành động (lệnh `orca` tương ứng). Đề xuất pause/kill ở
+In cảnh báo cô đọng + gợi ý hành động (lệnh `herdr` tương ứng). Đề xuất pause/kill ở
 mức Run nhưng **cần người xác nhận**; supervisor không tự kill/retry, lỗi/timeout
 không tự chuyển thành retry vô hạn.
 

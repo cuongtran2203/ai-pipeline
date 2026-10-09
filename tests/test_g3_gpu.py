@@ -21,7 +21,7 @@ import unittest
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "scripts"))
-import plan_to_orca as p2o
+import plan_to_herdr as p2o
 
 
 def gpu_eval_task(deps):

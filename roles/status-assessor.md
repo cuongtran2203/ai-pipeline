@@ -11,7 +11,7 @@ Xác định hiện trạng của một run: đang ở bước nào của pipeli
 1. Chạy `python scripts/project_status.py <run_dir> --json` để lấy phase dự kiến từ artifact.
 2. Kiểm chứng, vì script chỉ nhìn sự tồn tại của file:
    - Đọc nội dung từng artifact chính (requirements, data_analysis, architecture, plan.json, eval.json, report.md): có rỗng/placeholder/thiếu mục không? Artifact có đạt dòng acceptance trong task không?
-   - Hỏi Orca: `orca orchestration run-list`, `task-list --run <id>`, `worker-list --run <id> --include-remote` để biết task nào đang chạy / failed / chờ gate. Task đang chạy ≠ cần chạy lại.
+   - Hỏi Herdr: `python scripts/herdr_rt.py worker-list --run-dir <run_dir>` (+ `herdr agent list`, `herdr pane read <pane>`), `<run_dir>/tasks/`, `<run_dir>/worker_done/` để biết task nào đang chạy / failed / chờ gate. Task đang chạy ≠ cần chạy lại.
    - Với module: dataset có version? train/val vs test có lệch phân bố (xem data_analysis)? eval trên bộ real ≥50 mẫu nếu có real? Đã có 2 báo cáo md + html?
    - Gate G1/G2/G3 trong `done.json` có khớp với `decisions.md` không?
 3. Nếu script và bằng chứng mâu thuẫn, tin bằng chứng và nêu rõ chỗ lệch.

@@ -2,10 +2,10 @@
 """Mark a plan task done after the coordinator verified `worker_done` (outcome succeeded + acceptance met).
 
 Usage:
-  settle_task.py <run_dir> <orca_task_id>   # mark one task done + sync KG
+  settle_task.py <run_dir> <task_id>   # mark one task done + sync KG
   settle_task.py <run_dir> --reconcile      # retry the KG sync of every pending task
 
-Maps the Orca task id back to the plan id through task_map.json and appends it to done.json.
+Maps the Herdr task id back to the plan id through task_map.json and appends it to done.json.
 `done.json` is written through statefile.update_json (inter-process lock + atomic replace),
 idempotent by plan ID: settling the same task twice leaves exactly one entry, and a non-list
 file is refused instead of being overwritten. The KG sync runs only AFTER done.json has been
@@ -119,7 +119,7 @@ def _resolve_plan_id(run_dir, task):
         sys.exit(f"task_map.json không hợp lệ (phải là object) trong {run_dir}")
     ids = [k for k, v in tm.items() if v == task]
     if not ids:
-        sys.exit(f"unknown orca task id {task} for {run_dir}")
+        sys.exit(f"unknown task id {task} for {run_dir}")
     return ids[0]
 
 
@@ -188,15 +188,15 @@ def reconcile(run_dir):
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("run_dir")
-    ap.add_argument("orca_task_id", nargs="?")
+    ap.add_argument("task_id", nargs="?")
     ap.add_argument("--reconcile", action="store_true",
                     help="retry the KG sync for every plan id recorded in knowledge/sync_pending.json")
     a = ap.parse_args()
     if a.reconcile:
         sys.exit(reconcile(a.run_dir))
-    if not a.orca_task_id:
-        ap.error("cần <orca_task_id>, hoặc dùng --reconcile")
-    settle(a.run_dir, a.orca_task_id)
+    if not a.task_id:
+        ap.error("cần <task_id>, hoặc dùng --reconcile")
+    settle(a.run_dir, a.task_id)
 
 
 if __name__ == "__main__":

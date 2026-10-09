@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
-"""Agent roster gate: detect which agent runtimes Orca can use, let the human pick, record the choice.
+"""Agent roster gate: detect which agent CLIs Herdr can host, let the human pick, record the choice.
 
   agent_roster.py detect [--json] [--all]
-      Reads Orca's OWN agent catalog (ids + launch commands, extracted from the installed Orca bundle; falls back to a
-      built-in list) and probes each launch command on PATH, plus Orca status/accounts/hosts. Read-only: never installs,
-      logs in, or launches an agent session. `--all` also lists catalog agents that are not installed.
+      Probes each known agent launch command on PATH (Herdr auto-detects an agent from the command running in a pane,
+      so its catalog = the built-in list below) and checks the herdr CLI/server. Read-only: never installs, logs in, or
+      launches an agent session. `--all` also lists agents that are not installed.
 
-  agent_roster.py probe ID [--restore-run RUN_ID] [--timeout 150] [--long] [--model ID]
-      Readiness test of ONE agent through Orca: starts a throwaway Run and a no-op worker (no file changes, a few tokens),
-      waits for worker_done, releases it, and rebinds the coordinator to RUN_ID (default: the run bound now).
-      Use it before selecting an agent whose login/model setup you are unsure about (an installed CLI can still fail to start).
+  agent_roster.py probe ID [--timeout 150] [--long] [--model ID]
+      Readiness test of ONE agent through Herdr: creates a throwaway run dir + tab/pane, starts the agent with a no-op task
+      (no file changes, a few tokens), waits for worker_done, closes the pane. Use it before selecting an agent whose
+      login/model setup you are unsure about (an installed CLI can still fail to start).
 
   agent_roster.py select <run_dir> --orchestrator ID --code ID[,ID..] --debate ID[,ID..] [--analysis ID[,ID..]]
       Validates the choice against `detect` and writes <run_dir>/agents.json.
@@ -20,7 +20,7 @@ Groups: code = module-dev / integrator / error-analyst / feasibility-analyst (wr
         debate = model-proposer / critic / architect (model selection debate: use >=2 different agents);
         analysis = data-analyst / requirements-analyst / researcher / status-assessor (default: code group).
 The orchestrator is the agent session that runs the workflow (it cannot be swapped mid-session; if it differs
-from the current session, restart the workflow from that agent). plan_to_orca.py refuses to start workers
+from the current session, restart the workflow from that agent). plan_to_herdr.py refuses to start workers
 without agents.json and only uses agents selected here.
 """
 import argparse
@@ -35,14 +35,14 @@ import time
 
 sys.stdout.reconfigure(encoding="utf-8")
 sys.stderr.reconfigure(encoding="utf-8")
-ORCA = os.environ.get("ORCA_CLI_COMMAND") or ("orca-dev" if os.environ.get("ORCA_DEV_REPO_ROOT") else "orca")
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import herdr_rt  # noqa: E402
 
-# fallback when Orca's bundle cannot be read (id -> launch command)
-FALLBACK = {"claude": "claude", "codex": "codex", "opencode": "opencode", "opencode2": "opencode2", "cursor": "cursor-agent",
+# known agents (id -> launch command); Herdr recognises them by the command running in a pane
+CATALOG = {"claude": "claude", "codex": "codex", "opencode": "opencode", "opencode2": "opencode2", "cursor": "cursor-agent",
             "antigravity": "agy", "muse": "muse", "zcode": "zcode", "pi": "pi", "kimi": "kimi", "command-code": "command-code",
             "gemini": "gemini", "droid": "droid", "amp": "amp", "grok": "grok", "copilot": "copilot", "hermes": "hermes",
             "devin": "devin", "qoder": "qodercli", "codebuddy": "codebuddy", "aider": "aider", "goose": "goose"}
-CAT_RE = re.compile(r"\{id:`([a-z0-9\-]+)`,label:(?:[^{}`]|`[^`]*`)*?cmd:`([^`]+)`")
 
 
 def run(argv, timeout=15):
@@ -54,31 +54,16 @@ def run(argv, timeout=15):
         return 1, str(e)
 
 
-def orca_json(*args, timeout=30):
-    rc, out = run([ORCA, *args, "--json"], timeout)
-    i = out.find("{")
-    try:
-        return json.loads(out[i:]) if i >= 0 else None
-    except ValueError:
-        return None
+def catalog():
+    return dict(CATALOG), "built-in list"
 
 
-def orca_catalog():
-    """(catalog dict id->cmd, source). Orca's agent catalog lives in its app bundle; the CLI has no 'list agents'."""
-    exe = shutil.which(ORCA)
-    if exe:
-        asar = os.path.join(os.path.dirname(os.path.dirname(os.path.realpath(exe))), "app.asar")
-        if os.path.exists(asar):
-            try:
-                txt = open(asar, "rb").read().decode("utf-8", "replace")
-                cat = {}
-                for m in CAT_RE.finditer(txt):
-                    cat.setdefault(m.group(1), m.group(2))
-                if len(cat) >= 10:
-                    return cat, "orca bundle"
-            except OSError:
-                pass
-    return dict(FALLBACK), "built-in fallback"
+def herdr_ready():
+    """(installed, server_reachable). Server may be stopped: `herdr` launches/attaches the default session."""
+    if shutil.which(herdr_rt.HERDR) is None:
+        return False, False
+    rc, _ = run([herdr_rt.HERDR, "session", "list"], 10)
+    return True, rc == 0
 
 
 def extra_dirs():
@@ -100,7 +85,7 @@ def extra_dirs():
 
 
 def find_cli(cmd, extra):
-    """(path, on_active_path). on_active_path False = installed elsewhere; a shell/Orca launch of `cmd` may fail."""
+    """(path, on_active_path). on_active_path False = installed elsewhere; a pane launch of `cmd` may fail."""
     p = shutil.which(cmd)
     if p:
         return p, True
@@ -109,10 +94,8 @@ def find_cli(cmd, extra):
 
 
 def detect(show_all=False):
-    st = orca_json("status")
-    runtime_ok = bool(st and st.get("ok") and (st.get("result", {}).get("runtime", {}) or {}).get("reachable"))
-    accounts, hosts = orca_json("account", "list"), orca_json("host", "list")
-    cat, src = orca_catalog()
+    installed, runtime_ok = herdr_ready()
+    cat, src = catalog()
     rows = []
     extra = extra_dirs()
     for aid, cmd in sorted(cat.items()):
@@ -124,11 +107,10 @@ def detect(show_all=False):
             rc, out = run([path, "--version"], 8)
             ver = out.strip().splitlines()[0][:60] if rc == 0 and out.strip() else None
         rows.append({"id": aid, "cmd": cmd, "cli": path, "version": ver, "installed": bool(path),
-                     "on_active_path": active if path else None, "usable": bool(path) and runtime_ok})
-    return {"orca_runtime_reachable": runtime_ok, "catalog_source": src, "catalog_size": len(cat),
-            "orca_accounts": accounts.get("result") if accounts else None, "hosts": hosts.get("result") if hosts else None,
+                     "on_active_path": active if path else None, "usable": bool(path) and installed})
+    return {"herdr_installed": installed, "herdr_runtime_reachable": runtime_ok, "catalog_source": src, "catalog_size": len(cat),
             "agents": rows,
-            "note": "usable = launch command found on PATH and the Orca runtime is reachable. Login/model setup is NOT verified: "
+            "note": "usable = launch command found on PATH and the herdr CLI is installed. Login/model setup is NOT verified: "
                     "run `agent_roster.py probe <id>` (a no-op worker) before relying on an agent."}
 
 
@@ -137,7 +119,7 @@ def cmd_detect(a):
     if a.json:
         print(json.dumps(d, ensure_ascii=False, indent=2))
         return 0
-    print(f"Orca runtime: {'OK' if d['orca_runtime_reachable'] else 'NOT reachable (run: orca open)'}  | catalog: {d['catalog_size']} agents ({d['catalog_source']})")
+    print(f"Herdr: {'installed' if d['herdr_installed'] else 'NOT installed (https://github.com/herdrdev/herdr)'}, session {'reachable' if d['herdr_runtime_reachable'] else 'not running (run: herdr)'}  | catalog: {d['catalog_size']} agents ({d['catalog_source']})")
     print(f"{'agent id':<13} {'installed':<10} {'usable':<7} command / version")
     for r in d["agents"]:
         warn = "  [NOT on the active PATH: installed under another Node version/dir; launch may fail, see probe]" if r["installed"] and not r["on_active_path"] else ""
@@ -146,61 +128,41 @@ def cmd_detect(a):
     return 0
 
 
-def current_run():
-    d = orca_json("orchestration", "run-current")
-    try:
-        return d["result"]["run"]["id"]
-    except (TypeError, KeyError):
-        return None
-
-
 def cmd_probe(a):
-    cat, _ = orca_catalog()
+    import glob
+    import tempfile
+    cat, _ = catalog()
     if a.id not in cat:
-        sys.exit(f"{a.id} is not in Orca's agent catalog")
-    restore = a.restore_run or current_run()
-    r = orca_json("orchestration", "run-create", "--objective", f"probe agent {a.id} (no file changes)")
-    pr = r["result"]["run"]["id"]
+        sys.exit(f"{a.id} is not in the agent list")
+    herdr_rt.require_herdr()
+    rd = tempfile.mkdtemp(prefix=f"probe-{a.id}-")
+    r = herdr_rt.run_create(rd, f"probe agent {a.id} (no file changes)")["result"]["id"]
+    spec = "TASK PROBE: do not read or modify any file. Just finish."
+    if a.long:  # realistic task-spec size/shape: several KB, many lines, quotes, backticks, non-ASCII
+        nl = chr(10)
+        filler = nl.join(f"Constraint {k}: keep `code` intact, quote 'text', use Vietnamese diacritics (ă â ê ô ơ ư đ), paths like C:/work/run-{k}/file.md; padding for the probe only." for k in range(1, 36))
+        spec = spec + nl + nl + "Padding that mimics a real task spec (ignore it):" + nl + filler
+    tid = herdr_rt.task_create(rd, r, f"probe {a.id}", spec, [])["result"]["id"]
+    s = herdr_rt.worker_start(rd, r, tid, "current", f"probe-{a.id}", a.id, a.model, None)
     ok, detail = False, ""
-    try:
-        spec = "TASK PROBE: do not read or modify any file. Just finish: send worker_done with outcome succeeded and the one-sentence summary 'probe ok'."
-        if a.long:  # realistic task-spec size/shape: several KB, many lines, quotes, backticks, non-ASCII
-            nl = chr(10)
-            filler = nl.join(f"Constraint {k}: keep `code` intact, quote 'text', use Vietnamese diacritics (ă â ê ô ơ ư đ), paths like C:/work/run-{k}/file.md; padding for the probe only." for k in range(1, 36))
-            spec = spec + nl + nl + "Padding that mimics a real task spec (ignore it):" + nl + filler
-        s = orca_json("orchestration", "worker-start", "--run", pr, "--spec", spec,
-                      "--task-title", f"probe {a.id}", "--worktree", a.worktree, *(["--model", a.model] if a.model else []), *(["--name", f"probe-{a.id}"] if a.worktree.startswith("new-") else []), "--agent", a.id, timeout=int(a.timeout) + 60)
-        res = (s or {}).get("result", {})
-        if not s or not s.get("ok") or res.get("state") not in ("ready", "running"):
-            detail = f"start failed at stage '{res.get('stage') or res.get('failedStage') or (s or {}).get('error', {}).get('code')}'"
+    if not s.get("ok"):
+        detail = "start failed: " + json.dumps(s.get("result") or s, ensure_ascii=False)[:300]
+    else:
+        deadline = time.time() + a.timeout
+        while time.time() < deadline:
+            ev = herdr_rt.check(rd, True, 20000, {"worker_done", "escalation", "question"})["result"]["events"]
+            if any(e["type"] == "worker_done" for e in ev):
+                ok = True
+                break
+            if ev:
+                detail = "agent asked a question/escalated (needs interactive setup)"
+                break
         else:
-            deadline = time.time() + a.timeout
-            while time.time() < deadline:
-                c = orca_json("orchestration", "check", "--run", pr, "--wait", "--types", "worker_done,escalation,question",
-                              "--timeout-ms", "20000", timeout=60)
-                msgs = (c or {}).get("result", {}).get("messages", [])
-                if any(m["type"] == "worker_done" for m in msgs):
-                    ok = True
-                    break
-                if any(m["type"] in ("escalation", "question") for m in msgs):
-                    detail = "agent asked a question/escalated (needs interactive setup)"
-                    break
-            else:
-                detail = f"no worker_done within {a.timeout}s"
-        wl = orca_json("orchestration", "worker-list", "--run", pr)
-        for w in ((wl or {}).get("result", {}).get("workers") or (wl or {}).get("result", {}).get("rows") or []):
-            if w.get("dispatchId"):
-                if not ok:  # show what the agent's terminal looked like: usually a trust/login/permission prompt
-                    rd = orca_json("orchestration", "worker-read", "--dispatch", w["dispatchId"], "--source", "auto")
-                    txt = json.dumps((rd or {}).get("result", {}), ensure_ascii=False)
-                    detail += " | last output: " + re.sub(r"\n|\s+", " ", txt)[-500:]
-                orca_json("orchestration", "worker-release", "--dispatch", w["dispatchId"])
-    finally:
-        if a.worktree.startswith("new-"):
-            orca_json("worktree", "rm", "--worktree", f"branch:probe-{a.id}")
-        if restore:
-            orca_json("orchestration", "run-use", "--id", restore)
-    print(f"probe {a.id}: {'READY (worker_done received)' if ok else 'NOT READY — ' + detail}; coordinator rebound to {restore}")
+            pane = s["result"]["pane"]
+            _, out, _ = herdr_rt.herdr(*herdr_rt.HERDR_CMDS["pane_read"], pane, "--source", "recent")
+            detail = f"no worker_done within {a.timeout}s | last output: " + re.sub(r"\s+", " ", out)[-500:]
+        herdr_rt.worker_release(rd, s["result"]["dispatchId"])
+    print(f"probe {a.id}: {'READY (worker_done received)' if ok else 'NOT READY — ' + detail}")
     return 0 if ok else 1
 
 
@@ -215,7 +177,7 @@ def cmd_select(a):
     bad = sorted({x for g in chosen.values() for x in g if x not in usable} | ({a.orchestrator} - usable))
     if bad:
         sys.exit(f"not usable here: {', '.join(bad)} (usable: {', '.join(sorted(usable)) or 'none'}). "
-                 "Not installed or Orca runtime down: see `agent_roster.py detect --all`.")
+                 "Not installed or herdr missing: see `agent_roster.py detect --all`.")
     if not chosen["code"] or not chosen["debate"]:
         sys.exit("--code and --debate need at least one agent each")
     warn = []
@@ -246,9 +208,7 @@ def main():
     d.add_argument("--all", action="store_true")
     pr = sp.add_parser("probe")
     pr.add_argument("id")
-    pr.add_argument("--restore-run")
     pr.add_argument("--timeout", type=int, default=150)
-    pr.add_argument("--worktree", default="current", help="current | new-child (tests the launch path used for build tasks; removes the probe worktree afterwards)")
     pr.add_argument("--model", help="provider model id to test together with the agent (e.g. gpt-6-sol for codex)")
     pr.add_argument("--long", action="store_true", help="use a realistic multi-KB task spec (catches agents that drop long prompts)")
     s = sp.add_parser("select")

@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""Run a plan task on an agent that Orca cannot supervise (today: command-code) in headless mode.
+"""Run a plan task on an agent that Herdr cannot classify (today: command-code) in headless mode.
 
 Usage: run_headless_agent.py <run_dir> <task_id> [--plan PLAN.json] [--agent command-code] [--max-turns 80]
 
-Builds the self-contained task spec (plan_to_orca.build_spec) plus a footer, writes it to <run_dir>/artifacts/<task>/prompt.txt, and starts
-`command-code -p <prompt> --trust --no-session --accept-edits --max-turns N` in a visible Orca terminal (current checkout).
-There is NO Orca lifecycle for this agent: completion = the DONE.md the agent writes last (path printed below) and the files it owns; the
-coordinator must verify them (tests, diff, ownership) exactly like a worker_done. Mark the task started in started.json yourself, or Orca
+Builds the self-contained task spec (plan_to_herdr.build_spec) plus a footer, writes it to <run_dir>/artifacts/<task>/prompt.txt, and starts
+`command-code -p <prompt> --trust --no-session --accept-edits --max-turns N` in a visible Herdr pane (current checkout).
+There is NO Herdr agent lifecycle for this agent: completion = the DONE.md the agent writes last (path printed below) and the files it owns; the
+coordinator must verify them (tests, diff, ownership) exactly like a worker_done. Mark the task started in started.json yourself, or Herdr
 `worker-start` will try (and fail at agent_readiness). Stdlib only.
 """
 import argparse
@@ -18,7 +18,7 @@ import sys
 sys.stdout.reconfigure(encoding="utf-8")
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
-import plan_to_orca as p  # noqa: E402
+import plan_to_herdr as p  # noqa: E402
 
 
 def main():
@@ -46,15 +46,15 @@ def main():
     log = os.path.join(out, "headless.log")
     cmd = (f"command-code -p (Get-Content -Raw -Encoding UTF8 '{pf}') --trust --no-session --accept-edits "
            f"--max-turns {a.max_turns} *> '{log}'")
-    r = subprocess.run(["orca", "terminal", "create", "--worktree", "current", "--title", f"{a.task_id} command-code (headless)",
-                        "--command", cmd, "--json"], capture_output=True, text=True, encoding="utf-8")
-    t = r.stdout
-    try:
-        d = json.loads(t[t.find("{"):])
-        res = d.get("result") or d.get("error") or {}
-        print("terminal:", (res.get("terminal") or {}).get("handle") or json.dumps(res, ensure_ascii=False)[:200])
-    except ValueError:
-        print((t or r.stderr)[:300])
+    import herdr_rt
+    herdr_rt.require_herdr()
+    rc, out, err = herdr_rt.herdr(*herdr_rt.HERDR_CMDS["tab_create"], "--name", f"{a.task_id}-command-code-headless")
+    pane = herdr_rt.find_id(herdr_rt._json(out), ("pane_id", "root_pane_id")) if rc == 0 else None
+    if not pane:
+        print("herdr tab create failed:", (err or out)[:300])
+    else:
+        rc, out, err = herdr_rt.herdr(*herdr_rt.HERDR_CMDS["pane_run"], pane, cmd)
+        print("pane:", pane if rc == 0 else (err or out)[:300])
     print(f"prompt: {pf} ({len(spec)} chars)\ncompletion marker: {done}\nlog: {log}")
 
 

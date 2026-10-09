@@ -11,7 +11,7 @@ Bao loi (runs/ai-pipeline-v2/reviews/review_wave3.md, bang 'Loi moi / regression
 - P3 wording G3: schema/role noi G3 chi khi mode=train, code xet moi GPU.
 
 Chay: python -m unittest discover -s tests -v
-Stdlib only. KHONG goi Orca that (stub plan_to_orca.run; multiprocessing stub
+Stdlib only. KHONG goi Orca that (stub plan_to_herdr.run; multiprocessing stub
 Orca bang file log). Test race dung barrier file + da tien trinh (spawn).
 """
 import io
@@ -27,7 +27,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SCRIPTS = os.path.join(ROOT, "scripts")
 sys.path.insert(0, SCRIPTS)
 import autonomy as au
-import plan_to_orca as p2o
+import plan_to_herdr as p2o
 import statefile
 
 
@@ -105,7 +105,7 @@ def make_run_dir(tmp, plan, tids, policy="__omit__", done=("G2",),
 
 
 def run_start_ready(plan_path, run_dir, stub="ok", started_calls=None):
-    old_run, old_req = p2o.run, p2o.require_orca
+    old_run, old_req = p2o.run, p2o.require_herdr
     old_argv = sys.argv
     calls = started_calls if started_calls is not None else []
 
@@ -117,8 +117,8 @@ def run_start_ready(plan_path, run_dir, stub="ok", started_calls=None):
             return {"ok": False, "error": "worker-start that bai (stub)"}
         raise RuntimeError("mat receipt (stub)")
 
-    p2o.run, p2o.require_orca = fake_run, lambda: "stub-orca"
-    sys.argv = ["plan_to_orca.py", plan_path, "--run-dir", run_dir,
+    p2o.run, p2o.require_herdr = fake_run, lambda: "stub-herdr"
+    sys.argv = ["plan_to_herdr.py", plan_path, "--run-dir", run_dir,
                 "--start-ready", "--no-roster"]
     buf = io.StringIO()
     try:
@@ -128,13 +128,13 @@ def run_start_ready(plan_path, run_dir, stub="ok", started_calls=None):
     except SystemExit as e:
         return (e.code if isinstance(e.code, int) else 1), buf.getvalue()
     finally:
-        p2o.run, p2o.require_orca = old_run, old_req
+        p2o.run, p2o.require_herdr = old_run, old_req
         sys.argv = old_argv
 
 
 def run_create(plan_path, run_dir, stub_calls=None):
     """Chay --create voi Orca stub. Tra (code, out)."""
-    old_run, old_req = p2o.run, p2o.require_orca
+    old_run, old_req = p2o.run, p2o.require_herdr
     old_argv = sys.argv
     calls = stub_calls if stub_calls is not None else []
 
@@ -144,8 +144,8 @@ def run_create(plan_path, run_dir, stub_calls=None):
             return {"ok": True, "result": {"id": "run-stub-%d" % len(calls)}}
         return {"ok": True, "result": {"id": "task-stub-%d" % len(calls)}}
 
-    p2o.run, p2o.require_orca = fake_run, lambda: "stub-orca"
-    sys.argv = ["plan_to_orca.py", plan_path, "--run-dir", run_dir,
+    p2o.run, p2o.require_herdr = fake_run, lambda: "stub-herdr"
+    sys.argv = ["plan_to_herdr.py", plan_path, "--run-dir", run_dir,
                 "--create", "--no-roster"]
     buf = io.StringIO()
     try:
@@ -155,7 +155,7 @@ def run_create(plan_path, run_dir, stub_calls=None):
     except SystemExit as e:
         return (e.code if isinstance(e.code, int) else 1), buf.getvalue()
     finally:
-        p2o.run, p2o.require_orca = old_run, old_req
+        p2o.run, p2o.require_herdr = old_run, old_req
         sys.argv = old_argv
 
 
@@ -173,7 +173,7 @@ def _mp_start_ready(plan_path, run_dir, calls_log, gate_path):
     import sys as _s
     import time as _t
     _s.path.insert(0, SCRIPTS)
-    import plan_to_orca as _p2o
+    import plan_to_herdr as _p2o
     import statefile as _sf
     _wait_gate(gate_path)
 
@@ -183,8 +183,8 @@ def _mp_start_ready(plan_path, run_dir, calls_log, gate_path):
         n = len(_sf.read_jsonl(calls_log))
         return {"ok": True, "result": {"dispatchId": "mp-%d" % n}}
 
-    _p2o.run, _p2o.require_orca = fake_run, lambda: "stub-orca"
-    _s.argv = ["plan_to_orca.py", plan_path, "--run-dir", run_dir,
+    _p2o.run, _p2o.require_herdr = fake_run, lambda: "stub-herdr"
+    _s.argv = ["plan_to_herdr.py", plan_path, "--run-dir", run_dir,
                "--start-ready", "--no-roster"]
     try:
         _p2o.main()
@@ -198,7 +198,7 @@ def _mp_create(plan_path, run_dir, calls_log, gate_path):
     import sys as _s
     import time as _t
     _s.path.insert(0, SCRIPTS)
-    import plan_to_orca as _p2o
+    import plan_to_herdr as _p2o
     import statefile as _sf
     _wait_gate(gate_path)
     import os as _os
@@ -214,8 +214,8 @@ def _mp_create(plan_path, run_dir, calls_log, gate_path):
             title = argv[argv.index("--task-title") + 1].split()[-1]
         return {"ok": True, "result": {"id": "task-%s-p%d-%d" % (title, _os.getpid(), n)}}
 
-    _p2o.run, _p2o.require_orca = fake_run, lambda: "stub-orca"
-    _s.argv = ["plan_to_orca.py", plan_path, "--run-dir", run_dir,
+    _p2o.run, _p2o.require_herdr = fake_run, lambda: "stub-herdr"
+    _s.argv = ["plan_to_herdr.py", plan_path, "--run-dir", run_dir,
                "--create", "--no-roster"]
     try:
         _p2o.main()
@@ -227,7 +227,7 @@ def _mp_create(plan_path, run_dir, calls_log, gate_path):
 def _mp_migrate(run_dir, gate_path):
     import sys as _s
     _s.path.insert(0, SCRIPTS)
-    import plan_to_orca as _p2o
+    import plan_to_herdr as _p2o
     _wait_gate(gate_path)
     try:
         _p2o.migrate_started(run_dir)
@@ -241,7 +241,7 @@ def _mp_migrate_crash(run_dir):
     import os as _os
     import sys as _s
     _s.path.insert(0, SCRIPTS)
-    import plan_to_orca as _p2o
+    import plan_to_herdr as _p2o
     import statefile as _sf
     _sf._atomic_write = lambda *a, **k: _os._exit(7)
     try:
@@ -643,7 +643,7 @@ class TestWordingNeedsG3(unittest.TestCase):
               "resources": {"compute": "cpu"}}, False),
         ]
         for t, want in cases:
-            self.assertEqual(p2o.needs_g3(t), want, f"plan_to_orca {t}")
+            self.assertEqual(p2o.needs_g3(t), want, f"plan_to_herdr {t}")
             self.assertEqual(ps.task_needs_g3(t), want, f"project_status {t}")
 
     def test_assess_doi_ten_has_train_thanh_needs_g3(self):

@@ -452,7 +452,7 @@ def load_context_doc(run_dir):
 
 def resolve_task_id(cwd, tasks, run_id=None):
     """Chon task: AI_PIPELINE_TASK truoc; khong co thi khop ten worktree/
-    thu muc cwd dang <run_id>-<task_id> (plan_to_orca dat ten worktree
+    thu muc cwd dang <run_id>-<task_id> (plan_to_herdr dat ten worktree
     `--name <run_id>-<task_id lowercase>`, vd. `rr-i1` cho run `rr` task `I1`).
     So khop KHONG phan biet hoa thuong; ho tro run_id co dau '-'.
     Khong suy tu tham so trong event. Tra "" neu khong ra."""

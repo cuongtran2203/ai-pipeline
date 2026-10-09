@@ -27,8 +27,8 @@ Tat/bat tung rule trong `runs/<id>/guard_policy.json` hoac
 
 1. Doc ly do trong stderr: co rule id + cach khac phuc.
 2. Neu la viec chinh dang (vd. integrator can cham test): hoi coordinator
-   bang Orca `ask` (khong tu sua policy/guard de vuot):
-   `orca orchestration ask --question "..." ...`
+   bang Herdr `ask` (khong tu sua policy/guard de vuot):
+   `python scripts/worker_done.py <run_dir> ask --task <task_id> --question "..."`
 3. Ngoai le hop le do human duyet: them goi vao `allowed_packages`,
    mo rong `owns`, hoac tat rule trong `guard_policy.json` (ghi vao
    `decisions.md`). TUYET DOI khong sua `scripts/pipeline_guard.py`
@@ -56,7 +56,7 @@ ghi `<run>/task_context.json`. Khi hook chay, task duoc chon theo:
    khong phan biet hoa thuong), hoac
 2. Ten worktree/thu muc cwd dang `<run_id>-<task_id>` (chu thuong, vi du
    `rr-i1` cho run `rr` task `I1`, `my-run-t2` cho run `my-run` task `T2`;
-   `plan_to_orca.py` dat ten worktree `--name <run_id>-<task_id lowercase>`
+   `plan_to_herdr.py` dat ten worktree `--name <run_id>-<task_id lowercase>`
    nen khop tu dong; so khop khong phan biet hoa thuong, ho tro run_id
    co dau `-`).
 

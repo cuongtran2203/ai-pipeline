@@ -20,7 +20,7 @@ description: Phase 2 of the AI pipeline workflow. Multi-agent debate on model se
 - Gates: G2 khi có build/mode task; G3 chỉ khi có train task — mỗi task phụ thuộc gate nó cần (train → G3, build → G2).
 - Modules own disjoint directories so build workers can run in parallel.
 - Ngôn ngữ báo cáo của run: `"report_lang": "vi"|"en"` (mặc định vi).
-- Verify: `python scripts/plan_to_orca.py plan.json --dry-run` succeeds (no cycles).
+- Verify: `python scripts/plan_to_herdr.py plan.json --dry-run` succeeds (no cycles).
 
 ## Weakness playbook
 The architect also writes `runs/<id>/playbook.json` and renders `python scripts/playbook_diagram.py runs/<id>/playbook.json` (flow + risk per component + what to do when it is weak: DATA / MODEL / STRUCTURE / OBJECTIVE / NOISE, cost caps; start from `templates/playbook.template.json`). Show `playbook.html` to the human at G2 with 3–5 lines of explanation. See `ai-pipeline-diagnose`.

@@ -7,7 +7,7 @@ Chốt lựa chọn sau debate và lập kế hoạch thực thi.
 - Mọi model/dataset gán version (vd. `ds-v3`, `rec-v0.2`) và ghi vào artifact.
 - Sandbox: chạy mã/kiểm thử/cài đặt chỉ trong container (server, hoặc local nếu human cho phép); không tự ý cài thư viện — cần gì thì `ask` (skill `ai-pipeline-sandbox`).
 - Báo cáo gửi người dùng viết **tiếng Việt**.
-- Cần quyết định của người (khách, GPU server, duyệt plan): dùng lệnh `ask` trong preamble của Orca, không đoán.
+- Cần quyết định của người (khách, GPU server, duyệt plan): chạy `python scripts/worker_done.py <run_dir> ask --task <task_id> --question "..."` rồi DỪNG đợi trả lời trong pane (pane hiện blocked), không đoán.
 - Ghi sổ thí nghiệm của bài toán: `python scripts/notebook.py log <run_dir> --type experiment|research|error|insight ...` (giả thuyết, thiết lập, số đo, kết luận; cả kết quả âm). Xem skill `ai-pipeline-notebook`.
 - Kết thúc: `worker_done` đúng 1 lần, 3 câu tóm tắt, `--outcome succeeded|failed`, `--report-path` thật.
 
@@ -23,4 +23,4 @@ Chốt lựa chọn sau debate và lập kế hoạch thực thi.
 - Vẽ **sơ đồ pipeline từ plan** trình G2 cạnh playbook diagram: `python scripts/diagram.py from-plan plan.json --out <thư-mục> --name pipeline` rồi `python scripts/diagram.py validate <file.excalidraw>` (skill `ai-pipeline-diagram`; màu theo role/nhóm, gate G1/G2/G3 là cổng nét đứt, không diamond).
 
 ## Đầu ra
-`architecture.md` (quyết định, sơ đồ module, tiền/hậu xử lý, mục tiêu từng module, phương thức triển khai đề xuất) và `plan.json`. Chạy `python scripts/plan_to_orca.py plan.json --dry-run` để tự kiểm tra trước khi nộp.
+`architecture.md` (quyết định, sơ đồ module, tiền/hậu xử lý, mục tiêu từng module, phương thức triển khai đề xuất) và `plan.json`. Chạy `python scripts/plan_to_herdr.py plan.json --dry-run` để tự kiểm tra trước khi nộp.

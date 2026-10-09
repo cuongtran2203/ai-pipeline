@@ -20,7 +20,7 @@ BEGIN, END = "<!-- ai-pipeline:begin -->", "<!-- ai-pipeline:end -->"
 COPY_DIRS = ["skills", "roles", "templates", "schemas", "scripts"]
 GITIGNORE = ["runs/", "__pycache__/", "*.pyc", ".venv-graphify/", "graphify-out/", "vault/"]
 ALIASES = {
-    "status": "project_status.py", "validate": "validate_spec.py", "plan": "plan_to_orca.py",
+    "status": "project_status.py", "validate": "validate_spec.py", "plan": "plan_to_herdr.py",
     "report": "render_report.py", "notebook": "notebook.py", "kg": "kg.py",
     "agents": "agent_roster.py", "diagram": "playbook_diagram.py", "cleanup": "branch_cleanup.py",
     "autonomy": "autonomy.py", "supervisor": "supervisor.py", "seal": "seal.py",
@@ -298,8 +298,8 @@ def cmd_doctor(a):
     row(bool(which("git")), "git", run_ver(["git", "--version"]) if which("git") else "-", "bat buoc (worktree song song)")
     isrepo = (target / ".git").exists()
     row(isrepo, "git repo", "co" if isrepo else "chua", "git init && git add -A && git commit -m init")
-    orca = os.environ.get("ORCA_CLI_COMMAND") or ("orca-ide" if sys.platform.startswith("linux") else "orca")
-    row(bool(which(orca)), f"orca ({orca})", "co" if which(orca) else "-", "cai Orca de chay worker song song")
+    herdr = os.environ.get("HERDR_CLI_COMMAND") or "herdr"
+    row(bool(which(herdr)), f"herdr ({herdr})", "co" if which(herdr) else "-", "cai Herdr (github.com/herdrdev/herdr) de chay worker song song")
     for n, why in [("claude", "Claude Code"), ("codex", "Codex")]:
         row(bool(which(n)), n, "co" if which(n) else "-", f"{why}: chi can mot trong hai lam coordinator")
     row(bool(which("docker")), "docker", "co" if which("docker") else "-", "tuy chon (sandbox local/server)")

@@ -10,7 +10,7 @@ Mục tiêu: khi `ai-pipeline-diagnose` kết luận **DATA** hoặc **STRUCTURE
 Nguyên tắc bất di bất dịch:
 - **Dữ liệu ngoài chỉ để train/pretrain.** KHÔNG bao giờ đưa vào val/test của dự án. Mọi số đo vẫn trên **val thật** (hoặc OOF) của dự án; test khóa chỉ chạm 1 lần ở tích hợp cuối.
 - **`data_provenance.py` không tải và không dùng mạng.** Việc tải do worker trong container (luật `ai-pipeline-sandbox`) sau khi người duyệt; script chỉ ghi nhận + kiểm.
-- **Người duyệt nguồn + giấy phép** là cổng bắt buộc (dùng `ask` của Orca, ghi `decisions.md`). Approver phải là người: `approved_by = person:<tên>`.
+- **Người duyệt nguồn + giấy phép** là cổng bắt buộc (dùng `ask` (`scripts/worker_done.py`), ghi `decisions.md`). Approver phải là người: `approved_by = person:<tên>`.
 - **Không bịa nguồn.** Không chắc URL → ghi `chưa xác minh`.
 
 ## Quy trình (7 bước)

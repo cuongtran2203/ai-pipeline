@@ -16,7 +16,7 @@ Tuyệt đối không nhầm lẫn 3 lớp đồ thị sau:
 | Lớp đồ thị | Lưu trữ & Công cụ | Bản chất & Mục đích | Loại quan hệ tiêu biểu |
 |---|---|---|---|
 | **1. Knowledge Graph (Tri thức)** | `runs/<id>/knowledge/` (`kg.py`) | Bộ nhớ ngữ nghĩa và nhân quả của dự án; ghi nhận quyết định, bằng chứng, sự cố và tính hợp lệ bitemporal. | `decided_by`, `supersedes`, `caused`, `evidenced_by`, `evaluated_on`, `uses`, `approved_by` |
-| **2. Workflow DAG (Điều phối)** | `plan.json`, Orca tasks | Thứ tự thực thi, điều phối worker waves và các human gate. **Không phải cạnh nhân quả**. | `depends_on` (Task ➔ Task) |
+| **2. Workflow DAG (Điều phối)** | `plan.json`, Herdr tasks | Thứ tự thực thi, điều phối worker waves và các human gate. **Không phải cạnh nhân quả**. | `depends_on` (Task ➔ Task) |
 | **3. Code Graph (Mã nguồn)** | `graphify-out/` (`graphify`) | Cấu trúc cú pháp code cục bộ (AST), lời gọi hàm, class, module. | `calls`, `defines`, `imports` |
 
 ---

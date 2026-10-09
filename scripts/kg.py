@@ -891,7 +891,7 @@ def cmd_backfill(a):
     # Standard Person entities
     persons = [
         ("person:user", "Người dùng / Product Owner / Human Supervisor"),
-        ("person:coordinator", "Orca Run Coordinator"),
+        ("person:coordinator", "Herdr Run Coordinator"),
         ("person:data-analyst", "Data Analyst Agent"),
         ("person:requirements-analyst", "Requirements Analyst Agent"),
         ("person:researcher", "Researcher Agent"),

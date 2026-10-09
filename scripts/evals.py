@@ -57,7 +57,7 @@ TRIGGER_PREFIXES = (
 # Quy tắc bắt buộc của AGENTS.md phải còn xuất hiện trong skill điều phối.
 REQUIRED_RULES = {
     "skills/ai-pipeline/SKILL.md": ("G1", "G2", "G3", "sandbox", "report.md", "report.html"),
-    "skills/ai-pipeline-orca/SKILL.md": ("G2", "G3", "worktree"),
+    "skills/ai-pipeline-herdr/SKILL.md": ("G2", "G3", "worktree"),
 }
 SCORERS = ("must_call", "must_not_call", "must_mention", "must_ask_before")
 CASE_SOURCES = ("incident", "manual")
@@ -513,7 +513,7 @@ def print_list(cases_dir):
         print("  %-34s %-9s %-5s %s" % (c["id"], c.get("source", "manual"),
                                          c.get("status", "active"),
                                          c.get("description", "")[:70]))
-    print("Chạy 1 case: python scripts/evals.py run --behavior --agent <orca id|claude|codex|command-code> --case <ID>")
+    print("Chạy 1 case: python scripts/evals.py run --behavior --agent <agent id|claude|codex|command-code> --case <ID>")
     return 0
 
 
@@ -1033,7 +1033,7 @@ def main(argv=None):
     p_run.add_argument("--list", action="store_true", help="liệt kê case hành vi")
     p_run.add_argument("--behavior", action="store_true", help="chạy 1 case trên agent thật")
     p_run.add_argument("--replay", metavar="TRANSCRIPT", help="chấm lại transcript offline")
-    p_run.add_argument("--agent", default="claude", help="agent headless: orca id|claude|codex|command-code|pi")
+    p_run.add_argument("--agent", default="claude", help="agent headless: agent id|claude|codex|command-code|pi")
     p_run.add_argument("--agent-cmd", help="lệnh agent tuỳ biến; '{}' sẽ được thay bằng prompt")
     p_run.add_argument("--case", help="id case (bắt buộc với --behavior)")
     p_run.add_argument("--timeout", type=int, default=600, help="timeout giây cho 1 case hành vi")

@@ -15,7 +15,7 @@ reconcile truoc retry, KHONG giai phong quota theo suy doan).
 usage.tasks_started suy tu admission/started, khong cong thu cong.
 
 Chay: python -m unittest discover -s tests -v
-Stdlib only. KHONG goi Orca that (stub plan_to_orca.run; multiprocessing stub
+Stdlib only. KHONG goi Orca that (stub plan_to_herdr.run; multiprocessing stub
 Orca bang file log).
 """
 import io
@@ -31,7 +31,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SCRIPTS = os.path.join(ROOT, "scripts")
 sys.path.insert(0, SCRIPTS)
 import autonomy as au
-import plan_to_orca as p2o
+import plan_to_herdr as p2o
 import statefile
 
 
@@ -97,13 +97,13 @@ def make_run_dir(tmp, plan, policy="__omit__", done=("G2",), tmap=None,
 
 
 def run_start_ready(plan_path, run_dir, stub="ok", started_calls=None):
-    """Chay plan_to_orca --start-ready voi orca stub (khong goi Orca that).
+    """Chay plan_to_herdr --start-ready voi orca stub (khong goi Orca that).
 
     stub: "ok" (receipt ok + dispatchId) | "fail" (receipt ok=false, loi RO
     RANG) | "lost" (nem exception: mat receipt, loi KHONG RO).
     Tra (code, out). code la int khi SystemExit(int), 1 khi exit bang message.
     """
-    old_run, old_req = p2o.run, p2o.require_orca
+    old_run, old_req = p2o.run, p2o.require_herdr
     old_argv = sys.argv
     calls = started_calls if started_calls is not None else []
 
@@ -115,8 +115,8 @@ def run_start_ready(plan_path, run_dir, stub="ok", started_calls=None):
             return {"ok": False, "error": "worker-start that bai (stub)"}
         raise RuntimeError("mat receipt (stub)")
 
-    p2o.run, p2o.require_orca = fake_run, lambda: "stub-orca"
-    sys.argv = ["plan_to_orca.py", plan_path, "--run-dir", run_dir,
+    p2o.run, p2o.require_herdr = fake_run, lambda: "stub-herdr"
+    sys.argv = ["plan_to_herdr.py", plan_path, "--run-dir", run_dir,
                 "--start-ready", "--no-roster"]
     buf = io.StringIO()
     try:
@@ -126,7 +126,7 @@ def run_start_ready(plan_path, run_dir, stub="ok", started_calls=None):
     except SystemExit as e:
         return (e.code if isinstance(e.code, int) else 1), buf.getvalue()
     finally:
-        p2o.run, p2o.require_orca = old_run, old_req
+        p2o.run, p2o.require_herdr = old_run, old_req
         sys.argv = old_argv
 
 
@@ -150,7 +150,7 @@ def _mp_worker(plan_path, run_dir, calls_log):
     """Tien trinh con (spawn-safe): stub Orca bang file log lien tien trinh."""
     import sys as _s
     _s.path.insert(0, SCRIPTS)
-    import plan_to_orca as _p2o
+    import plan_to_herdr as _p2o
     import statefile as _sf
 
     def fake_run(argv):
@@ -158,8 +158,8 @@ def _mp_worker(plan_path, run_dir, calls_log):
         n = len(_sf.read_jsonl(calls_log))
         return {"ok": True, "result": {"dispatchId": "mp-%d" % n}}
 
-    _p2o.run, _p2o.require_orca = fake_run, lambda: "stub-orca"
-    _s.argv = ["plan_to_orca.py", plan_path, "--run-dir", run_dir,
+    _p2o.run, _p2o.require_herdr = fake_run, lambda: "stub-herdr"
+    _s.argv = ["plan_to_herdr.py", plan_path, "--run-dir", run_dir,
                "--start-ready", "--no-roster"]
     try:
         _p2o.main()

@@ -1177,7 +1177,7 @@ def datasource_gate_task(rnd, field):
         "title": "R%02d: duyet nguon du lieu ngoai cho '%s' (NGUOI THAT, khong worker)" % (rnd, field),
         "deps": [],
         "guidance": (
-            "Coordinator hoi NGUOI THAT qua ask (co che gate G1/G2/G3 cua plan_to_orca): "
+            "Coordinator hoi NGUOI THAT qua ask (co che gate G1/G2/G3 cua plan_to_herdr): "
             "chon dataset id + xac nhan giay phep. Sau duyet: researcher "
             "`python scripts/data_provenance.py register <run_dir> --card <file>` (neu chua), nguoi "
             "`python scripts/data_provenance.py approve <run_dir> <DATASET_ID> --approver person:<ten>`; "
@@ -1459,7 +1459,7 @@ def _run_lock_path(run_dir):
 
 
 def _needs_g3_local(t):
-    """Nguong G3 (giong plan_to_orca.needs_g3, khong import): train hoac gpu."""
+    """Nguong G3 (giong plan_to_herdr.needs_g3, khong import): train hoac gpu."""
     if t.get("mode") == "train":
         return True
     return (t.get("resources") or {}).get("compute") == "gpu"
@@ -1483,7 +1483,7 @@ def apply_next(run_dir, decision):
     plan.json va state.json truoc khi nha khoa. Idempotent: chay 2 lan khong
     nhan doi. Tu choi neu vong truoc chua `record` (pending_round). Task train
     (/GPU) duoc gan duong phu thuoc toi G3, task build toi G2 de
-    plan_to_orca.py chap nhan (ke ca khi co gate duyet nguon chen giua).
+    plan_to_herdr.py chap nhan (ke ca khi co gate duyet nguon chen giua).
     """
     os.makedirs(optimize_dir(run_dir), exist_ok=True)
     with statefile.file_lock(_run_lock_path(run_dir)):
@@ -2154,7 +2154,7 @@ def cmd_next(a):
         if dec.get("stop"):
             print("Ket qua: DUNG (khong sinh vong moi).")
         else:
-            print("Ket qua: CHAY vong %d (ghi vao plan.json khi --apply, chay bang plan_to_orca.py nhu thuong)." % dec["round"])
+            print("Ket qua: CHAY vong %d (ghi vao plan.json khi --apply, chay bang plan_to_herdr.py nhu thuong)." % dec["round"])
     return 0
 
 

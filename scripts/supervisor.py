@@ -8,10 +8,10 @@ trang thai worker (workers.json) de phat hien:
   - worker failed
 
 Chi IN canh bao co dong + goi y hanh dong theo escalation policy; de xuat
-pause/kill o muc Run duoi dang lenh orca nhung CAN nguoi xac nhan.
-KHONG tu kill/retry worker, KHONG thuc thi bat cu lenh orca nao.
+pause/kill o muc Run duoi dang lenh herdr nhung CAN nguoi xac nhan.
+KHONG tu kill/retry worker, KHONG thuc thi bat cu lenh herdr nao.
 
-workers.json (snapshot tu `orca orchestration worker-list --json` hoac check):
+workers.json (snapshot tu `scripts/herdr_snapshot.py`):
   {"now": "2026-10-04T12:00:00Z",
    "workers": [{"id": "w1", "task": "M1", "state": "running",
                 "last_heartbeat": "2026-10-04T11:30:00Z"}]}
@@ -109,12 +109,12 @@ def supervise(run_dir, policy=None, usage=None, snap=None, now=None, stale_overr
                 hb = parse_ts(w.get("last_heartbeat"))
                 if hb is None:
                     bump(1, f"worker {wid} (task {w.get('task', '?')}) khong co heartbeat",
-                         f"hoi coordinator kiem tra: orca orchestration check --terminal {wid} --json")
+                         f"hoi coordinator kiem tra: herdr agent get <pane cua {wid}> (hoac python scripts/herdr_rt.py worker-list --run-dir <run_dir>)")
                 elif (now - hb).total_seconds() > stale_min * 60:
                     mins = int((now - hb).total_seconds() // 60)
                     bump(2, f"worker {wid} (task {w.get('task', '?')}) im lang {mins} phut (> {stale_min})",
                          f"escalate len coordinator; neu treo that, nguoi xac nhan roi pause/kill muc Run, vd.: "
-                         f"orca orchestration worker-list --terminal-state reclaimable --json")
+                         f"herdr pane read <pane> --source recent  (python scripts/herdr_rt.py worker-list --run-dir <run_dir>)")
     if level == 0:
         lines.append("on: khong thay worker im lang, failed hay gan/vuot cap")
     if level >= 2:

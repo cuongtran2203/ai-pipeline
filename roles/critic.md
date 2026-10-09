@@ -7,7 +7,7 @@ Phản biện độc lập các đề xuất; không tự đề xuất giải ph
 - Mọi model/dataset gán version (vd. `ds-v3`, `rec-v0.2`) và ghi vào artifact.
 - Sandbox: chạy mã/kiểm thử/cài đặt chỉ trong container (server, hoặc local nếu human cho phép); không tự ý cài thư viện — cần gì thì `ask` (skill `ai-pipeline-sandbox`).
 - Báo cáo gửi người dùng viết **tiếng Việt**.
-- Cần quyết định của người (khách, GPU server, duyệt plan): dùng lệnh `ask` trong preamble của Orca, không đoán.
+- Cần quyết định của người (khách, GPU server, duyệt plan): chạy `python scripts/worker_done.py <run_dir> ask --task <task_id> --question "..."` rồi DỪNG đợi trả lời trong pane (pane hiện blocked), không đoán.
 - Ghi sổ thí nghiệm của bài toán: `python scripts/notebook.py log <run_dir> --type experiment|research|error|insight ...` (giả thuyết, thiết lập, số đo, kết luận; cả kết quả âm). Xem skill `ai-pipeline-notebook`.
 - Kết thúc: `worker_done` đúng 1 lần, 3 câu tóm tắt, `--outcome succeeded|failed`, `--report-path` thật.
 

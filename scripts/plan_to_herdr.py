@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Turn plan.json (task DAG) into Orca orchestration commands.
+"""Turn plan.json (task DAG) into Herdr-backed worker runs (scripts/herdr_rt.py).
 
 Modes
-  (default) / --dry-run   print waves + the exact orca commands, execute nothing
+  (default) / --dry-run   print waves + the exact runtime ops, execute nothing
   --create                run-create (unless --run given or task_map.json already
-                          holds _run from the seed plan — one Orca Run spans both
+                          holds _run from the seed plan — one Run spans both
                           plans, _run is reused, never overwritten) + task-create
                           deps translated to real task ids; writes <run_dir>/task_map.json
   --start-ready           worker-start for every task whose deps are all in <run_dir>/done.json
@@ -25,30 +25,19 @@ import sys
 import time
 import uuid
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import herdr_rt  # noqa: E402  (backend; cung thu muc scripts/)
 
-def resolve_orca():
-    """Same CLI rule as skills/ai-pipeline-orca/SKILL.md: ORCA_CLI_COMMAND,
-    else orca-dev under ORCA_DEV_REPO_ROOT, else orca-ide on Linux
-    (`orca` there collides with the GNOME screen reader), else orca."""
-    if os.environ.get("ORCA_CLI_COMMAND"):
-        return os.environ["ORCA_CLI_COMMAND"]
-    if os.environ.get("ORCA_DEV_REPO_ROOT"):
-        return "orca-dev"
-    if sys.platform.startswith("linux"):
-        return "orca-ide"
-    return "orca"
-
-
-ORCA = resolve_orca()
+# Sentinel argv[0]: cac op runtime (run-create/task-create/worker-start) di qua run() -> herdr_rt in-process.
+# Giu dang argv + receipt {"ok","result"} cu de logic admission/fencing va test khong doi.
+RT = "herdr-rt"
+HERDR = herdr_rt.HERDR
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
-def require_orca():
+def require_herdr():
     """Fail with a clear error (before any mutation) if the CLI is missing."""
-    if shutil.which(ORCA) is None:
-        sys.exit(f"plan error: orca CLI '{ORCA}' not found on PATH "
-                 f"(set ORCA_CLI_COMMAND to override)")
-    return ORCA
+    return herdr_rt.require_herdr()
 
 
 sys.stdout.reconfigure(encoding="utf-8")  # Windows pipes default to cp1252
@@ -73,7 +62,7 @@ _INVOCATION = uuid.uuid4().hex[:8]
 # KHONG bao gio dung de quyet dinh takeover giua cac tien trinh: dong ho
 # wall-clock khong dang tin giua tien trinh/may (clock skew, RV4 P1).
 # Takeover chi khi xac minh owner cu da chet/khong con (khong tin dong ho);
-# khong xac minh duoc thi GIU quota va reconcile qua Orca. Lease noi bo (neu
+# khong xac minh duoc thi GIU quota va reconcile qua Herdr. Lease noi bo (neu
 # can hien thi) chi dung dong ho don dieu time.monotonic(), khong so sanh
 # timestamp wall-clock giua cac tien trinh.
 STALE_RESERVED_SEC = 60
@@ -230,7 +219,7 @@ def ancestors(tid, by_id):
 
 
 def validate_plan(plan):
-    """Semantic validation BEFORE any Orca mutation. Exits non-zero with a
+    """Semantic validation BEFORE any Herdr mutation. Exits non-zero with a
     clear message (no traceback) on the first problem found."""
     tasks = plan.get("tasks")
     if not isinstance(tasks, list) or not tasks:
@@ -323,7 +312,7 @@ def build_spec(plan, t, run_dir):
         "Constraints: " + "; ".join(t.get("constraints", []) + [
             "all dataset/model artifacts must carry a version tag",
             f"reports for the user are written in {'Vietnamese' if lang == 'vi' else 'English'} (run report_lang={lang})",
-            "ask the coordinator (orca orchestration ask) instead of guessing when blocked on a human decision",
+            "ask the coordinator (python scripts/worker_done.py <run_dir> ask --task <id> --question ...) instead of guessing when blocked on a human decision",
             f"log each experiment/finding to the problem notebook: python scripts/notebook.py log {run_dir} --type experiment|research|error|insight --title ... --body ... --author {role} (hypothesis, setup, metrics, conclusion; see skills/ai-pipeline-notebook)",
         ]),
         "Ownership: you may edit only " + ", ".join(t.get("owns", [f"{run_dir}/artifacts/{t['id']}/"])),
@@ -333,7 +322,7 @@ def build_spec(plan, t, run_dir):
         *(["Worktree: you run in your OWN git worktree/branch. Commit code changes there (small commits); write artifacts, "
            "eval.json and reports to the absolute run dir above so others can read them. Never edit another task's paths; "
            "the integrator merges branches."] if isolated else []),
-        "Finish with worker_done (outcome succeeded|failed) and --report-path pointing at your main output.",
+        "Finish with worker_done (python scripts/worker_done.py <run_dir> done --task <id> --outcome succeeded|failed --report-path <main output>).",
     ]
     return "\n".join(lines)
 
@@ -343,6 +332,13 @@ def cmd_str(argv):
 
 
 def run(argv):
+    if argv and argv[0] == RT:  # op runtime in-process (herdr_rt), receipt {"ok","result"}
+        import io
+        from contextlib import redirect_stdout
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            herdr_rt.main(argv[1:])
+        return json.loads(buf.getvalue())
     r = subprocess.run(argv, capture_output=True, text=True, encoding="utf-8", errors="replace")
     if r.returncode != 0:
         sys.exit(f"command failed: {cmd_str(argv)}\n{r.stdout}\n{r.stderr}")
@@ -525,10 +521,10 @@ def admission_reserve(run_dir, task, policy, usage):
     coordinator khong cung nhan quota) — KHONG takeover dua tren tuoi
     wall-clock (RV4 P1: clock skew co the gay double-start). Idempotent cho
     chinh minh (retry cung lan chay khong dem 2 lan, giu generation cu).
-    Takeover owner khac chi bang xac minh thu cong (reconcile qua Orca
+    Takeover owner khac chi bang xac minh thu cong (reconcile qua Herdr
     request-show/dispatch-show: worker that su chua start thi sua ban ghi ve
     'failed'/xoa roi chay lai); khong xac minh duoc thi GIU quota.
-    KHONG giu khoa qua loi goi Orca (khoa chi quanh doc-sua-ghi).
+    KHONG giu khoa qua loi goi Herdr (khoa chi quanh doc-sua-ghi).
     Tra (True, "", warns) hoac (False, reason, warns).
     """
     warns = []
@@ -550,7 +546,7 @@ def admission_reserve(run_dir, task, policy, usage):
                 "task dang duoc giu (state=%s, owner=%s, ts=%s): "
                 "co the 1 coordinator khac dang start; khong nhan quota chong "
                 "(khong takeover theo tuoi wall-clock). Neu tien trinh do chac chan "
-                "da chet VA worker chua tung start (kiem tra qua Orca "
+                "da chet VA worker chua tung start (kiem tra qua Herdr "
                 "request-show/dispatch-show), sua ban ghi ve 'failed' hoac xoa "
                 "roi chay lai; neu khong xac minh duoc thi GIU quota, chay "
                 "--reconcile." % (rec.get("state"), rec.get("owner"), rec.get("ts")))
@@ -582,7 +578,7 @@ def admission_reserve(run_dir, task, policy, usage):
 
 
 def admission_claim_starting(run_dir, task_id, owner, generation):
-    """CAS reserved -> starting NGAY truoc loi goi Orca (1 khoa, RV4 P1).
+    """CAS reserved -> starting NGAY truoc loi goi Herdr (1 khoa, RV4 P1).
 
     Chi doi state khi owner VA generation con khop (ban ghi cua owner khac
     khong bao gio bi ghi de; owner cu cham khong the gan dispatch cua minh
@@ -595,12 +591,12 @@ def admission_claim_starting(run_dir, task_id, owner, generation):
             raise AdmissionDenied(
                 f"claim starting {task_id} that bai: ban ghi khong o 'reserved' "
                 f"(state={rec.get('state') if isinstance(rec, dict) else None}); "
-                "co the da co owner khac hoac da reconcile. GIU quota, khong goi Orca.")
+                "co the da co owner khac hoac da reconcile. GIU quota, khong goi Herdr.")
         if rec.get("owner") != owner or rec.get("generation") != generation:
             raise AdmissionDenied(
                 f"claim starting {task_id} bi tu choi: owner/generation khong khop "
                 f"(ban ghi owner={rec.get('owner')}); tu choi ghi de ban ghi cua "
-                "owner khac. GIU quota, khong goi Orca.")
+                "owner khac. GIU quota, khong goi Herdr.")
         rec = dict(rec)
         rec["state"] = "starting"
         rec["ts"] = autonomy_mod.utcnow()
@@ -698,11 +694,11 @@ def _claim_token():
 
 
 def tmap_claim(state_path, key, token):
-    """Claim 1 key trong task_map TRUOC side effect Orca (1 khoa, RV4 P2).
+    """Claim 1 key trong task_map TRUOC side effect Herdr (1 khoa, RV4 P2).
 
     Tra (status, value): 'claimed' (ta vua dat placeholder, duoc phep goi
-    Orca roi commit) | 'exists' (da co id that, dung lai, khong goi Orca) |
-    'held' (placeholder cua owner khac: KHONG goi Orca, doi/reconcile).
+    Herdr roi commit) | 'exists' (da co id that, dung lai, khong goi Herdr) |
+    'held' (placeholder cua owner khac: KHONG goi Herdr, doi/reconcile).
     Khong bao gio thay ca dict tu snapshot ngoai khoa.
     """
     out = {}
@@ -768,9 +764,9 @@ def tmap_release(state_path, key, token):
         sys.exit(f"state error: {e}")
 
 
-def worker_argv(t, task_id, default_agent, run_name="run"):
+def worker_argv(t, task_id, default_agent, run_name="run", run_dir="."):
     wt = worktree_for(t)
-    argv = [ORCA, "orchestration", "worker-start", "--task", task_id, "--worktree", wt]
+    argv = [RT, "worker-start", "--run-dir", run_dir, "--task", task_id, "--worktree", wt]
     if wt in ("new-child", "new-top-level"):
         argv += ["--name", f"{run_name}-{t['id'].lower()}"]
     argv += ["--agent", t.get("agent", default_agent), "--json"]
@@ -785,7 +781,7 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("plan")
     ap.add_argument("--run-dir", help="default: runs/<plan.run_id>")
-    ap.add_argument("--run", help="existing Orca run id (skip run-create)")
+    ap.add_argument("--run", help="existing Herdr run id (skip run-create)")
     ap.add_argument("--agent", default="claude", help="default agent for tasks without one (ignored when agents.json exists)")
     ap.add_argument("--no-roster", action="store_true", help="skip the agent roster gate (documented exception only)")
     g = ap.add_mutually_exclusive_group()
@@ -811,11 +807,11 @@ def main():
                  "(skills/ai-pipeline-agents). Use --no-roster only for a documented exception.")
 
     if a.create:
-        require_orca()
+        require_herdr()
         require_git_for_worktrees(tasks)
         state_path = os.path.join(run_dir, "task_map.json")
         my_token = _claim_token()
-        # One Orca Run spans the seed plan and the later build plan: reuse the
+        # One Herdr Run spans the seed plan and the later build plan: reuse the
         # stored _run, never overwrite it. Claim _run duoi khoa TRUOC
         # side effect run-create (2 coordinator khong tao Run trung, RV4 P2).
         st, val = tmap_claim(state_path, "_run", my_token)
@@ -827,7 +823,7 @@ def main():
         elif st == "held":
             sys.exit(f"plan error: task_map.json['_run'] dang duoc tao boi owner khac ({val}); "
                      "doi tien trinh do xong roi chay lai (khong tao Run trung). "
-                     "Neu tien trinh do chac chan da chet (kiem tra qua Orca run-list/task-list "
+                     "Neu tien trinh do chac chan da chet (kiem tra qua runs/tasks trong run dir "
                      "khong co Run/Task tuong ung), xoa key '_run' roi chay lai --create.")
         elif a.run:
             try:
@@ -836,7 +832,7 @@ def main():
                 sys.exit(f"plan error: {e}")
             run_id = a.run
         else:
-            out = run([ORCA, "orchestration", "run-create", "--objective", plan.get("objective", plan["title"]), "--json"])
+            out = run([RT, "run-create", "--run-dir", run_dir, "--objective", plan.get("objective", plan["title"]), "--json"])
             run_id = find_id(out)
             if not run_id:
                 tmap_release(state_path, "_run", my_token)
@@ -847,17 +843,17 @@ def main():
             except TmapConflict as e:
                 sys.exit(f"plan error: {e} Receipt run-create that lac: {run_id}. "
                          f"Tu reconcile tay: dat task_map.json['_run'] = '{run_id}' "
-                         "neu Orca run-list xac nhan Run ton tai.")
-        # gates are not Orca tasks; a task depending on a gate gets no Orca dep for it (coordinator holds start).
+                         "neu herdr_run.json xac nhan Run ton tai.")
+        # gates are not Herdr tasks; a task depending on a gate gets no Herdr dep for it (coordinator holds start).
         # Moi plan ID duoc claim duoi khoa TRUOC task-create (khong snapshot
-        # ngoai khoa roi thay ca dict); 2 coordinator khong tao task Orca
+        # ngoai khoa roi thay ca dict); 2 coordinator khong tao task Herdr
         # trung; that bai giua chung de lai placeholder de reconcile.
         worker_ids = {x["id"] for x in tasks if x.get("kind", "worker") == "worker"}
         known = {"_run": run_id}
         held, blocked_dep = [], []
 
-        def dep_orca_id(pid):
-            """Id Orca that cua dep worker (claim/commit theo wave truoc do)."""
+        def dep_task_id(pid):
+            """Id Herdr that cua dep worker (claim/commit theo wave truoc do)."""
             if pid in known:
                 return known[pid]
             st_d, val_d = tmap_claim(state_path, pid, my_token)
@@ -882,21 +878,21 @@ def main():
                 st, val = tmap_claim(state_path, t["id"], my_token)
                 if st == "exists":
                     known[t["id"]] = val
-                    continue  # idempotent: id da co duoc dung lai, khong goi Orca
+                    continue  # idempotent: id da co duoc dung lai, khong goi Herdr
                 if st == "held":
                     if t["id"] not in held:
                         held.append(t["id"])
-                    continue  # owner khac dang tao: KHONG tao task Orca trung
-                # Da claim (placeholder cua minh): tao task Orca NGOAI khoa roi commit.
+                    continue  # owner khac dang tao: KHONG tao task Herdr trung
+                # Da claim (placeholder cua minh): tao task Herdr NGOAI khoa roi commit.
                 deps = []
                 blocked = False
                 for d in t.get("deps", []):
                     if d not in worker_ids:
-                        continue  # gate: khong phai Orca dep, khong claim
+                        continue  # gate: khong phai Herdr dep, khong claim
                     if d in known:
                         deps.append(known[d])
                         continue
-                    did = dep_orca_id(d)
+                    did = dep_task_id(d)
                     if did is None:
                         blocked = True
                     else:
@@ -906,7 +902,7 @@ def main():
                     tmap_release(state_path, t["id"], my_token)
                     blocked_dep.append(t["id"])
                     continue
-                argv = [ORCA, "orchestration", "task-create", "--spec", build_spec(plan, t, run_dir),
+                argv = [RT, "task-create", "--run-dir", run_dir, "--spec", build_spec(plan, t, run_dir),
                         "--task-title", t["title"], "--run", run_id, "--json"]
                 if deps:
                     argv += ["--deps", json.dumps(deps)]
@@ -922,7 +918,7 @@ def main():
                 except TmapConflict as e:
                     sys.exit(f"plan error: {e} Receipt task-create {t['id']} that lac: {new_id}. "
                              f"Tu reconcile tay: dat task_map.json['{t['id']}'] = '{new_id}' "
-                             "neu Orca task-list xac nhan Task ton tai.")
+                             "neu <run_dir>/tasks xac nhan Task ton tai.")
                 known[t["id"]] = new_id
         if held or blocked_dep:
             detail = ""
@@ -932,14 +928,14 @@ def main():
                 detail += f" doi dep: {', '.join(blocked_dep)}."
             sys.exit(f"plan error: --create chua xong (2 coordinator tranh nhau?).{detail} "
                      "Doi tien trinh kia xong roi chay lai --create (idempotent: id da co duoc dung lai). "
-                     "Neu tien trinh kia chac chan da chet (Orca task-list khong co Task tuong ung), "
+                     "Neu tien trinh kia chac chan da chet (<run_dir>/tasks khong co Task tuong ung), "
                      "xoa placeholder '__creating__:*' roi chay lai.")
         final = must_read_dict(state_path, "task_map")
         print(f"created {len(final) - 1} tasks in run {final.get('_run')} -> {state_path}")
         return
 
     if a.start_ready:
-        require_orca()
+        require_herdr()
         require_git_for_worktrees(tasks)
         tmap = must_read_dict(os.path.join(run_dir, "task_map.json"), "task_map")
         done = set(rd(os.path.join(run_dir, "done.json"), []))
@@ -975,7 +971,7 @@ def main():
         # Task ket thuc mo (mat receipt / crash sau starting): KHONG retry mu
         # (tranh double-start), KHONG giai phong quota theo suy doan. Reconcile
         # truoc khi retry (--reconcile: nhan started co bang chung, con lai
-        # kiem tra thu cong qua Orca request-show/dispatch-show).
+        # kiem tra thu cong qua herdr_rt.py worker-list / herdr agent get).
         stuck = sorted(tid for tid, rec in adm.items()
                        if isinstance(rec, dict) and rec.get("state") == "starting"
                        and tid not in started and tid not in done)
@@ -984,7 +980,7 @@ def main():
                 print(f"reconcile can thiet cho {tid}: trang thai 'starting' (mat receipt hoac "
                       f"crash sau start, dispatch={adm[tid].get('dispatch')}). "
                       f"Chay --reconcile (tu nhan started co bang chung) hoac kiem tra thu cong "
-                      f"qua Orca request-show/dispatch-show truoc khi retry; quota duoc GIU.")
+                      f"qua herdr_rt.py worker-list / herdr agent get truoc khi retry; quota duoc GIU.")
             if not todo:
                 print("nothing ready (mark finished tasks/gates in done.json)")
             sys.exit("reconcile: %d task dang 'starting' (%s); giai quyet truoc khi start tiep."
@@ -1019,7 +1015,7 @@ def main():
             usage = autonomy_mod.read_usage_strict(run_dir) if autonomy_mod else {}
         except statefile_mod.StateCorrupt as e:
             sys.exit(f"state error: {e}")
-        # Admission theo TUNG worker ngay truoc loi goi Orca: check cap +
+        # Admission theo TUNG worker ngay truoc loi goi Herdr: check cap +
         # reserve (owner+generation, 1 khoa) -> CAS reserved->starting NGAY
         # truoc call (kiem owner/generation, chong ghi de, RV4 P1) ->
         # receipt -> started (+dispatchId, fenced theo owner) | loi RO RANG ->
@@ -1037,7 +1033,7 @@ def main():
                 continue
             if t["id"] not in tmap:
                 # Chua reserve gi cho task nay -> khong quota treo.
-                sys.exit(f"plan error: {t['id']} has no Orca task id in task_map.json (run --create first)")
+                sys.exit(f"plan error: {t['id']} has no task id in task_map.json (run --create first)")
             ok, reason, warns = admission_reserve(run_dir, t, policy, usage)
             for w in warns:
                 print(f"canh bao policy ({t['id']}): {w}")
@@ -1049,7 +1045,7 @@ def main():
             mine = admission_get(run_dir, t["id"])
             if not mine or mine.get("owner") != my_owner or mine.get("state") != "reserved":
                 blocked.append((t["id"], "reservation khong con thuoc minh sau reserve "
-                                        "(co the bi reconcile doi); GIU quota, khong goi Orca"))
+                                        "(co the bi reconcile doi); GIU quota, khong goi Herdr"))
                 autonomy_mod.append_audit(run_dir, "start_denied", scope=t["id"],
                                           decision="denied",
                                           reason="reservation doi chu sau reserve")
@@ -1065,11 +1061,11 @@ def main():
                 continue
             sync_usage_tasks(run_dir)  # dong bo tasks_started suy tu admission (fail-closed khi hong)
             try:
-                receipt = run(worker_argv(t, tmap[t["id"]], a.agent, plan["run_id"]) + ["--run", tmap["_run"]])
+                receipt = run(worker_argv(t, tmap[t["id"]], a.agent, plan["run_id"], run_dir) + ["--run", tmap["_run"]])
             except Exception as e:  # loi khong ro (mat receipt...): GIU starting, reconcile truoc retry
                 sys.exit(f"worker start khong ro ket qua cho {t['id']} ({e}): giu trang thai 'starting', "
                          "KHONG giai phong quota theo suy doan. Chay --reconcile (tu nhan started co "
-                         "bang chung) hoac kiem tra thu cong qua Orca request-show/dispatch-show "
+                         "bang chung) hoac kiem tra thu cong qua herdr_rt.py worker-list / herdr agent get "
                          "truoc khi retry.")
             if isinstance(receipt, dict) and receipt.get("ok") is False:
                 admission_mark(run_dir, t["id"], "failed",
@@ -1095,7 +1091,7 @@ def main():
                                owner=my_owner, generation=my_gen)
             except AdmissionDenied as e:
                 sys.exit(f"worker start xong nhung khong mark duoc {t['id']} ({e}): "
-                         "reservation da doi chu (co the reconcile). Kiem tra thu cong qua Orca "
+                         "reservation da doi chu (co the reconcile). Kiem tra thu cong qua Herdr "
                          "dispatch-show truoc khi retry; receipt giu de doi chieu.")
             save_started(t["id"], dispatch)  # persist after EACH receipt so a retry never double-starts a worker
             sync_usage_tasks(run_dir)
@@ -1117,7 +1113,7 @@ def main():
         # chung (done.json hoac started.json); 'reserved' KHONG bao gio tu
         # giai phong theo tuoi wall-clock (RV4 P1: clock skew, owner co the
         # con song). 'reserved'/'starting' khong bang chung duoc GIU + huong
-        # dan kiem tra thu cong qua Orca. KHONG giai phong quota theo suy doan.
+        # dan kiem tra thu cong qua Herdr. KHONG giai phong quota theo suy doan.
         started = migrate_started(run_dir)
         workers = [t for t in tasks if t.get("kind", "worker") == "worker"]
         admission_sync_started(run_dir, started, [t["id"] for t in workers])
@@ -1143,12 +1139,12 @@ def main():
         for tid in still:
             print(f"giu 'starting' cho {tid} (owner={adm[tid].get('owner')}, "
                   f"dispatch={adm[tid].get('dispatch')}): kiem tra thu cong qua "
-                  "Orca request-show/dispatch-show; neu worker that su chua start thi sua admission.json "
+                  "Herdr request-show/dispatch-show; neu worker that su chua start thi sua admission.json "
                   "ve 'failed' (giai phong quota) hoac xoa ban ghi roi chay lai --start-ready.")
         for tid in held_reserved:
             print(f"giu 'reserved' cho {tid} (owner={adm[tid].get('owner')}): KHONG tu giai phong "
                   "theo tuoi wall-clock. Neu owner chac chan da chet VA worker chua tung start "
-                  "(kiem tra qua Orca request-show/dispatch-show), sua ban ghi ve 'failed' hoac xoa "
+                  "(kiem tra qua herdr_rt.py worker-list / herdr agent get), sua ban ghi ve 'failed' hoac xoa "
                   "roi chay lai --start-ready; neu khong xac minh duoc thi GIU quota.")
         if still or held_reserved:
             pending = sorted(set(still) | set(held_reserved))
@@ -1159,11 +1155,11 @@ def main():
 
     # dry run (default): DAG description only — NOT directly runnable.
     # <RUN_ID>/<TASK_ID> are placeholders resolved at --create; --deps shows
-    # symbolic plan ids mapped to real Orca task ids by --create.
+    # symbolic plan ids mapped to real Herdr task ids by --create.
     print(f"# {plan['title']}  | run dir: {run_dir}")
-    print(f"# CLI: {ORCA}")
+    print(f"# CLI: {HERDR} (+ {RT} = scripts/herdr_rt.py)")
     print("# DRY-RUN: DAG description only, not runnable as shown. Use --create to build it.\n")
-    print(cmd_str([ORCA, "orchestration", "run-create", "--objective", plan.get("objective", plan["title"]), "--json"]))
+    print(cmd_str([RT, "run-create", "--run-dir", run_dir, "--objective", plan.get("objective", plan["title"]), "--json"]))
     for i, layer in enumerate(waves(tasks), 1):
         print(f"\n=== WAVE {i} (parallel: {sum(1 for t in layer if t.get('kind','worker')=='worker')} workers) ===")
         for t in layer:
@@ -1175,13 +1171,13 @@ def main():
             print(f"[{t['id']}] {t['title']}  role={t.get('role','module-dev')} agent={t.get('agent', a.agent)} deps={deps}"
                   + (f" mode={t['mode']}" if t.get("mode") else "")
                   + (f" resources={t['resources'].get('compute', '?')}" if t.get("resources") else ""))
-            print("   " + cmd_str([ORCA, "orchestration", "task-create", "--task-title", t["title"],
+            print("   " + cmd_str([RT, "task-create", "--run-dir", run_dir, "--task-title", t["title"],
                                    "--spec", "<spec: %d chars, passed via --create>" % len(build_spec(plan, t, run_dir)),
                                    "--run", "<RUN_ID>",
                                    "--deps", json.dumps(t.get("deps", []))]) + "  # deps are symbolic plan ids")
-            print("   " + cmd_str(worker_argv(t, "<TASK_ID>", a.agent, plan["run_id"])))
-    print(f"\n# then: {ORCA} orchestration check --wait --types worker_done,escalation,question --timeout-ms 900000 --json")
-    print(f"# finally: {ORCA} orchestration worker-list --terminal-state reclaimable --json  (release/retain each)")
+            print("   " + cmd_str(worker_argv(t, "<TASK_ID>", a.agent, plan["run_id"], run_dir)))
+    print(f"\n# then: python scripts/herdr_rt.py check --run-dir {run_dir} --wait --types worker_done,escalation,question --timeout-ms 900000")
+    print(f"# finally: python scripts/herdr_rt.py worker-list --run-dir {run_dir}  (worker-release --dispatch <id> each settled one)")
 
 
 if __name__ == "__main__":

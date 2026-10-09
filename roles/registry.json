@@ -1,5 +1,5 @@
 {
-  "$comment": "Registry role/capability: nguồn duy nhất cho ánh xạ role -> nhóm agent (plan_to_orca.py đọc file này, GROUP_OF trong code chỉ là fallback khi thiếu file). Thêm role mới thì khai ở đây, không sửa code.",
+  "$comment": "Registry role/capability: nguồn duy nhất cho ánh xạ role -> nhóm agent (plan_to_herdr.py đọc file này, GROUP_OF trong code chỉ là fallback khi thiếu file). Thêm role mới thì khai ở đây, không sửa code.",
   "groups": {
     "code": ["module-dev", "integrator", "error-analyst", "feasibility-analyst", "weakness-diagnostician"],
     "debate": ["model-proposer", "critic", "architect"],

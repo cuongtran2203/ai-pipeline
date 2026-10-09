@@ -5,7 +5,7 @@ Usage: project_status.py [run_dir] [--json]     (default run_dir: newest folder 
 
 Phases: 0 intake · 1 analysis · 2 planning · 3 build · 4 integration · 5 optimize · 6 release.
 The script reads artifacts only; it does not know whether a worker is still running. The
-status-assessor agent adds that (orca worker-list / task-list) and judges artifact quality.
+status-assessor agent adds that (herdr_rt.py worker-list + herdr agent get) and judges artifact quality.
 """
 import argparse
 import glob
@@ -33,13 +33,13 @@ def task_mode(t):
 
 try:
     sys.path.insert(0, os.path.join(ROOT, "scripts"))
-    from plan_to_orca import needs_g3 as _plan_needs_g3
+    from plan_to_herdr import needs_g3 as _plan_needs_g3
 except ImportError:  # chay doc lap: fallback cung ngu nghia
     _plan_needs_g3 = None
 
 
 def task_needs_g3(t):
-    """Task co can gate G3 (GPU/server) khong: dung chung helper voi plan_to_orca.
+    """Task co can gate G3 (GPU/server) khong: dung chung helper voi plan_to_herdr.
 
     Can G3 khi mode=train HOAC resources.compute=gpu (ke ca evaluate-only tren
     GPU). CPU-only khong can G3.
@@ -251,7 +251,7 @@ def assess(run_dir):
         "gates_done": sorted(g for g in done if g.startswith("G")),
         "tasks_started": sorted(started), "tasks_done": sorted(done),
         "blocked_on_human": blocked, "next_actions": actions,
-        "caveat": "Dựa trên file artifact; chưa biết worker nào đang chạy hay chất lượng artifact — assessor kiểm bằng orca + đọc nội dung.",
+        "caveat": "Dựa trên file artifact; chưa biết worker nào đang chạy hay chất lượng artifact — assessor kiểm bằng herdr + đọc nội dung.",
     }
 
 

@@ -69,9 +69,9 @@ class SettleTaskTests(unittest.TestCase):
              "deps": ["G2"]},
         ])
         with open(os.path.join(run, "task_map.json"), "w", encoding="utf-8") as f:
-            json.dump({"T1": "orca-t1"}, f)
+            json.dump({"T1": "task-t1"}, f)
 
-        r = run_cli("settle_task.py", run, "orca-t1")
+        r = run_cli("settle_task.py", run, "task-t1")
         self.assertEqual(r.returncode, 0, r.stderr)
 
         v = run_cli("kg.py", "validate", run)

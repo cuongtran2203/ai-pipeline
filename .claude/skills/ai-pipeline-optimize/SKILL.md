@@ -12,8 +12,8 @@ Vong toi uu la buoc **BAT BUOC** sau baseline, khong phai tuy chon. Chu trinh da
 | 0. Policy | `python scripts/optimize.py init <run_dir>` | Tu `templates/optimize_policy.template.json`; nguoi duyet o **G2** cung playbook. Tu dien `default_target` tu spec neu ro; liet ke bang ung vien de chon `metrics_source` |
 | 0b. Chon bang | `python scripts/optimize.py init <run_dir> --metrics-table <index\|regex> --field-col item --value-col auto` | Ghi `metrics_source` vao policy (regex khop nhieu bang thi dung tat ca) |
 | 1. Trang thai | `python scripts/optimize.py status <run_dir>` | Bang tieng Viet moi field/component: baseline, moi nhat, target, khoang cach, xu huong, so vong, verdict |
-| 2. Quyet dinh | `python scripts/optimize.py next <run_dir> [--json] [--apply]` | STOP (5 dieu kien) hoac GO; `--apply` ghi vong vao plan.json **trong mot khoa giao dich** (doc trong khoa, idempotent), roi chay `python scripts/plan_to_orca.py --create/--start-ready` nhu thuong |
-| 3. Chay task | Orca workers | DIAG truoc (neu thieu diagnosis), roi hanh dong theo nhanh, ket vong bang evaluate + report |
+| 2. Quyet dinh | `python scripts/optimize.py next <run_dir> [--json] [--apply]` | STOP (5 dieu kien) hoac GO; `--apply` ghi vong vao plan.json **trong mot khoa giao dich** (doc trong khoa, idempotent), roi chay `python scripts/plan_to_herdr.py --create/--start-ready` nhu thuong |
+| 3. Chay task | Herdr workers | DIAG truoc (neu thieu diagnosis), roi hanh dong theo nhanh, ket vong bang evaluate + report |
 | 4. Ghi nhan | `python scripts/optimize.py record <run_dir> --round N --gpu-hours X` | Gain **co dau** + kiem hoi quy; ghi `optimize/rounds.jsonl` (append-only, idempotent) + state **duoi mot khoa**; KG/so sau, loi thi `reconcile` |
 | 4b. Reconcile | `python scripts/optimize.py reconcile <run_dir>` | Ghi lai phan KG/notebook thieu (co `kg_pending` trong state) |
 
@@ -64,7 +64,7 @@ Moi task co `predicted_gain` bat buoc (so du doan tang metric, do tren val/OOF).
 ## Cong duyet nguon du lieu ngoai (gate nguoi that)
 
 - DATA/STRUCTURE can du lieu ngoai sinh chuoi: `R<NN>-research` (researcher **de xuat, KHONG tai**, dang ky card qua `data_provenance.py register`) → **GATE** `kind: gate` "duyet nguon du lieu ngoai" → build/aux/integrate.
-- Cong do **coordinator hoi NGUOI THAT bang ask** (co che gate G1/G2/G3 cua `plan_to_orca`), ghi `decisions.md`, them id gate vao `done.json`. Task train/aux co `deps` gom gate va acceptance bat buoc ``python scripts/data_provenance.py use-check <run_dir> <DATASET_ID>`` thanh cong (da register+approve, hash khop) truoc khi train.
+- Cong do **coordinator hoi NGUOI THAT bang ask** (co che gate G1/G2/G3 cua `plan_to_herdr`), ghi `decisions.md`, them id gate vao `done.json`. Task train/aux co `deps` gom gate va acceptance bat buoc ``python scripts/data_provenance.py use-check <run_dir> <DATASET_ID>`` thanh cong (da register+approve, hash khop) truoc khi train.
 - `policy.approved_sources` la danh sach **ID registry** da duyet tu truoc (**so khop chinh xac**, khong substring); thieu → luon sinh gate.
 - **Gioi han that**: CLI khong xac thuc danh tinh nguoi duyet (chuoi `person:<ten>` ai cung go duoc); cong nguoi that la co che gate cua coordinator, khong phai lenh `data_provenance approve`.
 

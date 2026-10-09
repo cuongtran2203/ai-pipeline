@@ -10,7 +10,7 @@ Yeu cau (debate_v2_improvements.md bang B, dong 1):
 - policy hong/vang giu tuong thich nguoc (van chay) nhung in canh bao ro.
 
 Chay: python -m unittest discover -s tests -v
-Stdlib only. Khong goi Orca that (monkeypatch plan_to_orca.run).
+Stdlib only. Khong goi Orca that (monkeypatch plan_to_herdr.run).
 """
 import io
 import json
@@ -23,7 +23,7 @@ from contextlib import redirect_stdout
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "scripts"))
 import autonomy as au
-import plan_to_orca as p2o
+import plan_to_herdr as p2o
 
 
 def write(path, obj):
@@ -76,16 +76,16 @@ def make_run_dir(tmp, plan, policy=None, done=("G2",)):
 
 
 def run_start_ready(plan_path, run_dir, started_calls):
-    """Chay plan_to_orca --start-ready voi orca stub (khong goi Orca that)."""
-    old_run, old_req = p2o.run, p2o.require_orca
+    """Chay plan_to_herdr --start-ready voi orca stub (khong goi Orca that)."""
+    old_run, old_req = p2o.run, p2o.require_herdr
     old_argv = sys.argv
 
     def fake_run(argv):
         started_calls.append(argv)
         return {"ok": True, "result": {"dispatchId": f"d-{len(started_calls)}"}}
 
-    p2o.run, p2o.require_orca = fake_run, lambda: "stub-orca"
-    sys.argv = ["plan_to_orca.py", plan_path, "--run-dir", run_dir,
+    p2o.run, p2o.require_herdr = fake_run, lambda: "stub-herdr"
+    sys.argv = ["plan_to_herdr.py", plan_path, "--run-dir", run_dir,
                 "--start-ready", "--no-roster"]
     buf = io.StringIO()
     try:
@@ -95,7 +95,7 @@ def run_start_ready(plan_path, run_dir, started_calls):
     except SystemExit as e:
         return (e.code if isinstance(e.code, int) else 1), buf.getvalue()
     finally:
-        p2o.run, p2o.require_orca = old_run, old_req
+        p2o.run, p2o.require_herdr = old_run, old_req
         sys.argv = old_argv
 
 

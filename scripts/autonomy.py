@@ -16,7 +16,7 @@ CLI:
   autonomy.py approve <run_dir> --scope T3 --decision approve --reason "..." [--actor person:user]
   autonomy.py log <run_dir> --event start --scope T3 --decision started --reason "..." [--actor X]
 
-API cho plan_to_orca / coordinator:
+API cho plan_to_herdr / coordinator:
   from autonomy import policy_status, read_usage_strict, check_action, append_audit,
       derive_tasks_started, read_admission, read_started_map
 
@@ -80,7 +80,7 @@ def load_policy(run_dir, override=None):
     """Doc policy; None neu run chua co policy (tuong thich nguoc: run cu van chay).
 
     Giu nguyen chu ky vi project_status/supervisor dung de hien thi (read-only).
-    Duong start (plan_to_orca --start-ready) KHONG dung ham nay ma dung
+    Duong start (plan_to_herdr --start-ready) KHONG dung ham nay ma dung
     policy_status() de phan biet missing (cho phep + audit migration) voi
     corrupt/invalid (fail-closed: dung start).
     """
@@ -236,7 +236,7 @@ def write_usage(run_dir, usage, override=None):
 def reserve_task_quota(run_dir, n=1, usage=None, override=None):
     """Cong don tasks_started ngay vao usage.json (atomic, qua statefile).
 
-    Giu lai de tuong thich (test/unit cu); duong start moi (plan_to_orca
+    Giu lai de tuong thich (test/unit cu); duong start moi (plan_to_herdr
     --start-ready) KHONG dung ham nay nua ma suy tasks_started tu
     admission/started (derive_tasks_started) theo tung task ID.
     File hong -> StateCorrupt (khong ghi de).

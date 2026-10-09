@@ -1,12 +1,12 @@
 # ai-pipeline
 
-Workflow đa agent cho dự án AI: **file spec → kế hoạch → thực thi song song**, chạy được trên **Claude Code** và **Codex**, điều phối bằng **[Orca](https://github.com/stablyai/orca)**. `ai-pipeline` là CLI cài workflow này vào **bất kỳ project nào** (Linux, macOS, Windows) mà không đụng tới file của bạn.
+Workflow đa agent cho dự án AI: **file spec → kế hoạch → thực thi song song**, chạy được trên **Claude Code** và **Codex**, điều phối bằng **[Herdr](https://github.com/herdrdev/herdr)**. `ai-pipeline` là CLI cài workflow này vào **bất kỳ project nào** (Linux, macOS, Windows) mà không đụng tới file của bạn.
 
 Nguyên tắc: data trước, không làm phức tạp hoá, ước lượng giới hạn khả thi trước khi tối ưu, mọi thí nghiệm có `report.md` + `report.html`, người duyệt ở 3 cổng G1/G2/G3, mọi việc chạy trong sandbox container.
 
 ## Quy trình sản xuất pipeline AI (tổng quan)
 
-Đầu vào là một file spec. Coordinator (Claude Code hoặc Codex) chạy các phase; mỗi phase là một đợt worker song song trên Orca. Ba cổng **G1/G2/G3** luôn cần người duyệt.
+Đầu vào là một file spec. Coordinator (Claude Code hoặc Codex) chạy các phase; mỗi phase là một đợt worker song song trên Herdr. Ba cổng **G1/G2/G3** luôn cần người duyệt.
 
 ```mermaid
 flowchart TD
@@ -87,15 +87,24 @@ flowchart TD
 
 Ví dụ thực tế: bài timesheet OCR có mục tiêu 99%/field vượt ceiling; thí nghiệm bác bỏ giả thuyết "sinh data tổng hợp giúp được" và "thêm module tách ô giúp được", nên pipeline dừng vòng lặp thay vì chạy mãi.
 
-## Cách coordinator điều phối worker với Orca
+## Phiên bản
+
+| Tag | Runtime | Ghi chú |
+|---|---|---|
+| `1.0.0` | [Orca](https://github.com/stablyai/orca) | bản ổn định cuối dùng Orca (`git checkout 1.0.0`) |
+| `1.0.0.rc` | [Herdr](https://github.com/herdrdev/herdr) | release candidate: `plan_to_herdr.py`, `herdr_rt.py`, `worker_done.py`; chưa chạy với herdr thật, chạy `python scripts/herdr_rt.py verify` trước |
+
+Khác biệt chính: Herdr không có task DAG/`worker_done`/`ask` nên run, task, worker_done và ask là file trong `runs/<id>/` (`tasks/`, `workers/`, `worker_done/`, `asks/`); mỗi worker chạy trong tab/pane riêng + git worktree riêng; không còn auto-release (dùng `worker-release`).
+
+## Cách coordinator điều phối worker với Herdr
 
 ```mermaid
 flowchart TD
-    PL["plan.json: DAG task + deps"] --> CR["plan_to_orca --create<br/>tạo Run và Task"]
-    CR --> SR["plan_to_orca --start-ready<br/>worker-start cho task đủ điều kiện"]
-    SR --> CK["orca check --wait<br/>worker_done, question, escalation"]
+    PL["plan.json: DAG task + deps"] --> CR["plan_to_herdr --create<br/>tạo Run và Task"]
+    CR --> SR["plan_to_herdr --start-ready<br/>worker-start cho task đủ điều kiện"]
+    SR --> CK["herdr_rt.py check --wait<br/>worker_done, question, escalation"]
     CK --> Q{"Loại tin nhắn"}
-    Q -->|"question"| AQ["Trả lời, hoặc hỏi người nếu là gate<br/>orca reply"]
+    Q -->|"question"| AQ["Trả lời, hoặc hỏi người nếu là gate<br/>worker_done.py answer"]
     Q -->|"worker_done"| RV["Review độc lập: phạm vi file, test, diff<br/>acceptance có đạt?"]
     Q -->|"escalation"| ESC["Xử lý chặn: duyệt gói, quyết định giao thức"]
     AQ --> CK
@@ -117,7 +126,7 @@ flowchart LR
     AUTO --> CAP{"Trong giới hạn?<br/>số task, mode theo phase, cap"}
     CAP -->|"có"| RUN["Worker chạy, ghi audit.jsonl"]
     CAP -->|"không"| BLOCK["Từ chối khởi động,<br/>cần người nâng cap"]
-    RUN --> SUP["supervisor.py chỉ đọc<br/>+ orca_snapshot.py"]
+    RUN --> SUP["supervisor.py chỉ đọc<br/>+ herdr_snapshot.py"]
     SUP --> ALERT["Cảnh báo: worker failed, im lặng,<br/>gần ngưỡng cap"]
     ALERT --> HUMAN["Người xem và can thiệp"]
 ```
@@ -220,7 +229,7 @@ git clone https://github.com/cuongtran2203/ai-pipeline && cd ai-pipeline
 python -m ai_pipeline --help
 ```
 
-Để chạy worker song song cần thêm: [Orca](https://github.com/stablyai/orca) và ít nhất một trong `claude` (Claude Code) / `codex`. Docker là tuỳ chọn (sandbox). `ai-pipeline doctor` kiểm tra tất cả.
+Để chạy worker song song cần thêm: [Herdr](https://github.com/herdrdev/herdr) và ít nhất một trong `claude` (Claude Code) / `codex`. Docker là tuỳ chọn (sandbox). `ai-pipeline doctor` kiểm tra tất cả.
 
 ## Bắt đầu nhanh
 
@@ -236,7 +245,7 @@ Rồi mở thư mục bằng Claude Code hoặc Codex và nói:
 
 > Chạy ai-pipeline với spec `spec.md`
 
-Agent sẽ chạy skill `ai-pipeline`: validate spec → hỏi bạn ở G1/G2/G3 → tạo Run trên Orca → chạy worker song song. Kết quả nằm ở `runs/<run_id>/`. Hỏi *"dự án đang ở bước nào"* để chạy skill `ai-pipeline-status`.
+Agent sẽ chạy skill `ai-pipeline`: validate spec → hỏi bạn ở G1/G2/G3 → tạo Run trên Herdr → chạy worker song song. Kết quả nằm ở `runs/<run_id>/`. Hỏi *"dự án đang ở bước nào"* để chạy skill `ai-pipeline-status`.
 
 ## `ai-pipeline init` KHÔNG ghi đè hay sửa file của bạn
 
@@ -256,11 +265,11 @@ Tính chất: chạy lại `init` nhiều lần cho kết quả giống nhau (id
 | `ai-pipeline init [path] [--agent claude\|codex\|both] [--link] [--gitignore] [--force] [--dry-run] [-v]` | cài workflow vào project |
 | `ai-pipeline update [path]` | nâng cấp file framework. File bạn đã sửa được giữ nguyên, bản mới ghi ra `<file>.new` để tự merge |
 | `ai-pipeline uninstall [path] [--dry-run]` | gỡ các file đã cài mà bạn chưa sửa; file của bạn và `runs/` không bị đụng |
-| `ai-pipeline doctor [path]` | kiểm tra python/git/orca/claude/codex/docker, bản cài, skills mirror |
+| `ai-pipeline doctor [path]` | kiểm tra python/git/herdr/claude/codex/docker, bản cài, skills mirror |
 | `ai-pipeline new-run <tên> <spec.md>` | tạo `runs/<tên>/` từ spec |
 | `ai-pipeline status [run_dir]` | phase hiện tại + việc cần làm tiếp |
 | `ai-pipeline validate <spec>` | liệt kê câu hỏi còn thiếu cho G1 |
-| `ai-pipeline plan plan.json [--dry-run \| --create \| --start-ready]` | DAG → task/worker trên Orca |
+| `ai-pipeline plan plan.json [--dry-run \| --create \| --start-ready]` | DAG → task/worker trên Herdr |
 | `ai-pipeline report eval.json` | `report.md` (3 phần, tiếng Việt) + `report.html` (gom cụm lỗi) |
 | `ai-pipeline hooks install\|status\|uninstall` | cài/gỡ hook cưỡng chế (merge, không đè settings) |
 | `ai-pipeline pack list\|status\|install\|build\|uninstall [graphify\|obsidian] [--yes]` | cài/build pack tuỳ chọn (xem mục Pack) |
@@ -295,19 +304,19 @@ Tạo thư mục `skills/<tên-skill>/SKILL.md` rồi `ai-pipeline sync-skills` 
 ```
 .ai-pipeline/AGENTS.md   luật chung của workflow (hoặc đọc qua AGENTS.md của bạn)
 skills/                  23 skill: ai-pipeline, -intake, -analysis, -planning, -module-dev, -integration,
-                         -report, -orca, -status, -feasibility, -notebook, -graph, -agents, -sandbox,
+                         -report, -herdr, -status, -feasibility, -notebook, -graph, -agents, -sandbox,
                          -diagnose, -knowledge, -autonomy, -hooks, -evals, -monitor, -optimize, -research, -diagram
 .claude/skills/  .agents/skills/   bản sao cho Claude Code / Codex (theo --agent)
 roles/                   prompt role dùng chung cho 2 runtime
 templates/  schemas/     spec, report, playbook, autonomy policy; plan/eval/kg schema
-scripts/                 validate_spec, plan_to_orca, render_report, project_status, notebook, kg, seal,
+scripts/                 validate_spec, plan_to_herdr, render_report, project_status, notebook, kg, seal,
                          autonomy, supervisor, ... (chỉ cần Python stdlib)
 .ai-pipeline.json        manifest (version + hash file đã cài)
 ```
 
 ## Ghi chú vận hành
 
-- Orca: `orca status --json` phải chạy được. Worker `pi`/`antigravity` chỉ chạy ổn với worktree `current`; `command-code` chạy headless (`scripts/run_headless_agent.py`). Xem skill `ai-pipeline-agents`.
+- Herdr: `herdr` (server) phải chạy được; `python scripts/herdr_rt.py verify` đối chiếu cú pháp CLI. Worker `pi`/`antigravity` chỉ chạy ổn với worktree `current`; `command-code` chạy headless (`scripts/run_headless_agent.py`). Xem skill `ai-pipeline-agents`.
 - Sandbox: mọi huấn luyện/benchmark/cài gói chạy trong container, không cài gói lên host khi chưa được duyệt (skill `ai-pipeline-sandbox`).
 - `seal.py` bảo vệ nhãn test ở mức quy trình, **không phải** ranh giới bảo mật filesystem.
 - Windows: dùng Git Bash hoặc PowerShell; mọi script là Python thuần, không cần symlink.

@@ -14,7 +14,7 @@ Cac lop:
       tinh band dung huong, xu ly sigma=0 / baseline qua ngan / min_n, ghi
       monitor/state.json + monitor/actions.jsonl (append-only, idempotent), mo
       monitor/incidents/<id>.md cho tang >= diagnose, ghi Incident vao KG (kg.py) va
-      ghi so thi nghiem type=error. KHONG tu rollback, khong goi Orca/mang.
+      ghi so thi nghiem type=error. KHONG tu rollback, khong goi Herdr/mang.
 
 Commands:
   monitor.py record <run_dir> --metric M --value V [--n N] [--label k=v ...] [--now ISO]

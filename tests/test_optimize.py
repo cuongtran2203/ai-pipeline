@@ -968,13 +968,13 @@ class OP4SourceGateTests(unittest.TestCase):
         self.assertIn("ext-digits-v1", aux.get("acceptance", ""))
         self.assertIn("use-check", aux.get("acceptance", ""))
 
-    def test_gate_plan_passes_plan_to_orca_dry_run(self):
+    def test_gate_plan_passes_plan_to_herdr_dry_run(self):
         run = self._structure_run()
         dec = optimize.decide_next(run)
         optimize.apply_next(run, dec)
         plan_p = os.path.join(run, "plan.json")
         v = subprocess.run(
-            [sys.executable, os.path.join(SCRIPTS, "plan_to_orca.py"),
+            [sys.executable, os.path.join(SCRIPTS, "plan_to_herdr.py"),
              plan_p, "--run-dir", run, "--dry-run"],
             capture_output=True, text=True, encoding="utf-8", cwd=ROOT)
         self.assertEqual(v.returncode, 0, v.stderr)
