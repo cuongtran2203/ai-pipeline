@@ -1,0 +1,25 @@
+{
+  "title": "OCR timesheet: det -> rec (ong Dang, ban ve dg1)",
+  "direction": "LR",
+  "lanes": ["input", "detect", "recognize", "decide", "output"],
+  "nodes": [
+    {"id": "img", "label": "Ảnh timesheet vào", "kind": "data", "lane": "input", "note": "dataset ts-v1"},
+    {"id": "det", "label": "Detector vùng bảng", "kind": "ai", "lane": "detect", "note": "det-v0.3"},
+    {"id": "cls", "label": "Phân loại ô viết tay/in", "kind": "ai", "lane": "detect", "note": "cls-v0.1"},
+    {"id": "rec", "label": "Recognizer chữ số", "kind": "ai", "lane": "recognize", "note": "rec-v0.2"},
+    {"id": "rule", "label": "Hậu xử lý + đối soát giờ", "kind": "service", "lane": "recognize"},
+    {"id": "eval", "label": "Đánh giá field-level", "kind": "evaluation", "lane": "decide", "note": "val real 60 trang"},
+    {"id": "g2", "label": "Cổng G2: duyệt ngưỡng", "kind": "human-gate", "lane": "decide"},
+    {"id": "rep", "label": "Báo cáo round + sơ đồ", "kind": "artifact", "lane": "output"}
+  ],
+  "edges": [
+    {"from": "img", "to": "det"},
+    {"from": "det", "to": "cls"},
+    {"from": "cls", "to": "rec"},
+    {"from": "rec", "to": "rule"},
+    {"from": "rule", "to": "eval"},
+    {"from": "eval", "to": "g2", "label": "đạt mục tiêu?"},
+    {"from": "g2", "to": "rep"}
+  ],
+  "legend": "Ví dụ pipeline OCR det->rec; cổng quyết định là chữ nhật bo góc nét đứt (không diamond)"
+}

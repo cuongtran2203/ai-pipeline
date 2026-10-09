@@ -1,0 +1,20 @@
+{
+  "model": "digit-cls",
+  "version": "v0.1",
+  "direction": "LR",
+  "blocks": [
+    {"id": "inp", "label": "Ảnh xám 28x28", "part": "input", "tensor": "[N,1,28,28]"},
+    {"id": "conv", "label": "Conv 3x3 + ReLU", "part": "backbone", "tensor": "[N,32,28,28]", "repeat": 2},
+    {"id": "pool", "label": "MaxPool 2x2", "part": "backbone", "tensor": "[N,32,14,14]"},
+    {"id": "fc", "label": "FC-128 + Dropout", "part": "head", "tensor": "[N,128]"},
+    {"id": "out", "label": "FC-10 + Softmax", "part": "head", "tensor": "[N,10]"},
+    {"id": "loss", "label": "CrossEntropy", "part": "loss", "tensor": "scalar"}
+  ],
+  "edges": [
+    {"from": "inp", "to": "conv"},
+    {"from": "conv", "to": "pool"},
+    {"from": "pool", "to": "fc"},
+    {"from": "fc", "to": "out"},
+    {"from": "out", "to": "loss"}
+  ]
+}

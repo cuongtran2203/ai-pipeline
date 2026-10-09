@@ -20,3 +20,6 @@ Ghép pipeline và kiểm thử end-to-end.
 
 ## Đầu ra
 Pipeline chạy được + `eval.json` e2e theo field.
+- Vẽ **sơ đồ hệ thống cuối** (pipeline + kiến trúc model chính) bằng skill `ai-pipeline-diagram`
+  (`python scripts/diagram.py render|from-plan|from-model ...`, `python scripts/diagram.py validate ...`),
+  khai `diagrams` trong `eval.json` e2e để report cuối nhúng sơ đồ.
