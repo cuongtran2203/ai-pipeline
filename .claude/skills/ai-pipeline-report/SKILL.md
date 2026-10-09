@@ -20,5 +20,15 @@ Do not narrate the execution diary and do not paste long logs: keep only numbers
 ## report.html
 Focused on **visualizing the error clusters** (distribution bars, one card per cluster with cause and concrete examples; optional `image` per example). Not a copy of the md.
 
+## Sơ đồ pipeline / kiến trúc mô hình (tùy chọn, khuyến khích)
+
+Khi report nói về **pipeline** (luồng task/dữ liệu) hoặc **kiến trúc mô hình**, tạo sơ đồ bằng
+skill `ai-pipeline-diagram` (`python scripts/diagram.py render|from-plan|from-model ...`,
+`python scripts/diagram.py validate ...`, chỉ nhúng file đã VALID, không diamond) và khai
+`diagrams: [{title, svg, excalidraw?}]` trong `eval.json` (schema: `schemas/eval.schema.json`).
+`report.html` nhúng SVG nội tuyến (không tải ngoài), `report.md` chèn liên kết tới file;
+file sơ đồ đặt trong `runs/<id>/reports/round-NN-<slug>/diagrams/`. Thiếu trường `diagrams`
+thì hành vi cũ không đổi.
+
 ## eval.json notes
 `overview.status|method|result` ⇒ the three Tổng quan bullets. `eval_contract` (optional) `{unit, split{strategy random|group|temporal|rolling-origin, details}, metrics[{name, direction higher|lower}], slices[], horizon, scorer{kind human|model|rule, details}, uncertainty{method, level}, provenance{}}`. `tables[].name` = scope (slice/horizon; ví dụ OCR/KIE: document type), `tables[].metric`/`n`/`eval_set`, rows `{item, metric, direction, n | correct,total | value+unit, ci, baseline_correct | prev_value, prev_metric/prev_set}`; a row with no numbers renders `N/A`. `errors[]` `{cluster,count,denominator,fields,cause,example|examples}`. `conclusion.fixes[]` `{priority,error,fix,measure}`; optional `artifacts[]` `{label,path}`.
