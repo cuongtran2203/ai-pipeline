@@ -48,7 +48,7 @@ def main():
            f"--max-turns {a.max_turns} *> '{log}'")
     import herdr_rt
     herdr_rt.require_herdr()
-    rc, out, err = herdr_rt.herdr(*herdr_rt.HERDR_CMDS["tab_create"], "--name", f"{a.task_id}-command-code-headless")
+    rc, out, err = herdr_rt.herdr(*herdr_rt.HERDR_CMDS["tab_create"], "--label", f"{a.task_id}-command-code-headless", "--cwd", os.getcwd(), "--no-focus")
     pane = herdr_rt.find_id(herdr_rt._json(out), ("pane_id", "root_pane_id")) if rc == 0 else None
     if not pane:
         print("herdr tab create failed:", (err or out)[:300])

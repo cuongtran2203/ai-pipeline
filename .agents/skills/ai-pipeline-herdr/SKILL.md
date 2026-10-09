@@ -25,7 +25,7 @@ Rules that matter here: a timeout/empty wait is a checkpoint, not failure; never
 - `--start-ready` skips gates already in `done.json`. `phase: train|probe` needs a dependency path to G2 and G3; `phase: build` to G2.
 - A probe/train/build worker runs in its own worktree (`../.worktrees/<repo>/<run_id>-<task_id>`); the integrator merges its branch into master; remove merged worktrees afterwards with `scripts/branch_cleanup.py`.
 - Agents are recognised by Herdr from the command in the pane (`claude`, `codex`, `pi`, `opencode`, …). One it cannot classify (e.g. command-code) → `scripts/run_headless_agent.py`, confirm by output files.
-- 1.0.0.rc is validated by stub tests only; the first real run must watch `herdr_rt.py verify` and one `probe` (`agent_roster.py probe <id>`) before trusting a wave.
+- 1.0.0.rc was probed against herdr 0.9.3 + claude (Windows); on a new machine watch `herdr_rt.py verify` and one `probe` (`agent_roster.py probe <id>`) before trusting a wave.
 
 ## Review checklist (mandatory before merging/committing any worker output)
 Lessons from the v2 waves (RV3 found defects that the workers' own tests and a first coordinator pass missed). For every worker branch or owned-file change:

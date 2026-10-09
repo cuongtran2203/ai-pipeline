@@ -33,17 +33,21 @@ HERDR = os.environ.get("HERDR_CLI_COMMAND") or "herdr"
 
 # Cu phap herdr (theo https://herdr.dev/docs/cli-reference/). Sua DUY NHAT o day neu `--help` khac.
 HERDR_CMDS = {
-    "workspace_create": ["workspace", "create"],        # + --name N
-    "tab_create": ["tab", "create"],                    # + --workspace W --name N  (1 tab/pane rieng cho moi worker)
+    "workspace_create": ["workspace", "create"],        # + --label N --cwd D --no-focus
+    "tab_create": ["tab", "create"],                    # + --workspace W --label N --cwd D --env K=V --no-focus  (1 tab/pane rieng/worker)
     "pane_list": ["pane", "list"],
     "pane_run": ["pane", "run"],                        # + <pane> <command>
     "pane_send_text": ["pane", "send-text"],            # + <pane> <text>
     "pane_read": ["pane", "read"],                      # + <pane> [--source recent]
     "pane_close": ["pane", "close"],                    # + <pane>
+    "agent_start": ["agent", "start"],                  # + <name> --kind K --pane P [-- args]
+    "agent_prompt": ["agent", "prompt"],                # + <name> <text>
     "agent_get": ["agent", "get"],                      # + <target>
     "agent_wait": ["agent", "wait"],                    # + <target> [--status ..] [--timeout ..]
 }
 # Lenh agent -> cach khoi dong trong pane (herdr tu nhan dien agent theo ten lenh).
+AGENT_KINDS = {"pi", "claude", "codex", "gemini", "cursor", "devin", "agy", "cline", "omp", "mastracode", "opencode",
+               "copilot", "kimi", "kiro", "droid", "amp", "grok", "hermes", "kilo", "qodercli", "qwen", "letta", "maki", "muse"}
 AGENT_CMD = {"claude": "claude", "codex": "codex", "pi": "pi", "opencode": "opencode", "cursor": "cursor-agent",
              "gemini": "gemini", "kimi": "kimi", "qwen": "qwen"}
 
@@ -130,9 +134,9 @@ def run_create(run_dir, objective):
         return ok(**prior)  # idempotent: 1 Run / run dir
     rid = "run-" + uuid.uuid4().hex[:8]
     ws = None
-    rc, out, _ = herdr(*HERDR_CMDS["workspace_create"], "--name", rid)
+    rc, out, _ = herdr(*HERDR_CMDS["workspace_create"], "--label", rid, "--cwd", ROOT, "--no-focus")
     if rc == 0:
-        ws = find_id(_json(out), ("workspace_id", "id"))
+        ws = find_id(_json(out), ("workspace_id",))
     rec = {"id": rid, "objective": objective, "workspace": ws, "created": int(time.time())}
     _wr(os.path.join(run_dir, "herdr_run.json"), rec)
     return ok(**rec)
@@ -179,20 +183,26 @@ def worker_start(run_dir, run_id, task_id, worktree, name, agent, model, effort)
     if model and agent == "claude":
         cmd += f" --model {model}"
     ws = (_rd(os.path.join(run_dir, "herdr_run.json")) or {}).get("workspace")
-    rc, out, _ = herdr(*HERDR_CMDS["tab_create"], *(["--workspace", ws] if ws else []), "--name", _slug(name or disp))
+    rc, out, _ = herdr(*HERDR_CMDS["tab_create"], *(["--workspace", ws] if ws else []), "--label", _slug(name or disp),
+                       "--cwd", cwd, "--env", f"HERDR_DISPATCH_ID={disp}", "--no-focus")
     pane = find_id(_json(out), ("pane_id", "root_pane_id")) if rc == 0 else None
     if not pane:
         return {"ok": False, "result": {"failedStage": "pane", "detail": f"tab create khong tra pane ({out[:200]})"}}
-    setenv = (f"$env:HERDR_DISPATCH_ID='{disp}'" if sys.platform == "win32" else f"export HERDR_DISPATCH_ID='{disp}'")
-    steps = [HERDR_CMDS["pane_run"] + [pane, f'cd "{cwd}"'],
-             HERDR_CMDS["pane_run"] + [pane, setenv],
-             HERDR_CMDS["pane_run"] + [pane, cmd],
-             HERDR_CMDS["pane_send_text"] + [pane, f"Doc {prompt} va thuc hien dung task do. Day la task cua ban."]]
+    msg = f"Doc {prompt} va thuc hien dung task do. Day la task cua ban."
+    if agent in AGENT_KINDS:  # agent duoc herdr ho tro: start doi san sang that, roi prompt
+        extra = ["--", "--model", model] if (model and agent == "claude") else []
+        steps = [HERDR_CMDS["agent_start"] + [disp, "--kind", agent, "--pane", pane, "--timeout", "120000"] + extra,
+                 HERDR_CMDS["agent_prompt"] + [disp, msg]]
+    else:  # agent herdr khong phan loai (vd command-code): chay lenh trong pane, gui prompt bang send-text + Enter
+        steps = [HERDR_CMDS["pane_run"] + [pane, cmd],
+                 HERDR_CMDS["pane_send_text"] + [pane, msg],
+                 ["pane", "send-keys", pane, "Enter"]]
     for st in steps:
-        rc, out, e = herdr(*st)
+        rc, out, e = herdr(*st, timeout=150)
         if rc != 0:
             return {"ok": False, "result": {"failedStage": "launch", "detail": (e or out)[:300], "residualResources": [pane]}}
-        time.sleep(1.5 if st is steps[2] else 0)  # cho agent san sang truoc khi gui prompt
+        if st is steps[0] and agent not in AGENT_KINDS:
+            time.sleep(3)
     _wr(os.path.join(pdir, disp + ".json"),
         {"dispatchId": disp, "taskId": task_id, "run": run_id, "pane": pane, "cwd": cwd, "branch": branch,
          "agent": agent, "started": int(time.time())})

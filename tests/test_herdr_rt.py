@@ -61,11 +61,11 @@ class HerdrRt(unittest.TestCase):
         self.assertIn(tid, prompt)
         verbs = [c[:2] for c in self.fake.calls]
         self.assertIn(("tab", "create"), verbs)
-        self.assertEqual(verbs.count(("pane", "run")), 3)  # cd, setenv, agent
-        self.assertIn(("pane", "send-text"), verbs)
+        self.assertIn(("agent", "start"), verbs)
+        self.assertIn(("agent", "prompt"), verbs)
 
     def test_worker_start_failure_is_clear_receipt(self):
-        self.fake.fail_on = ("pane", "run")
+        self.fake.fail_on = ("agent", "start")
         _, _, s = self._start()
         self.assertFalse(s["ok"])
         self.assertEqual(s["result"]["failedStage"], "launch")
