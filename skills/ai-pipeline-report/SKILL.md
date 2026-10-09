@@ -1,6 +1,6 @@
 ---
 name: ai-pipeline-report
-description: Report contract for the AI pipeline workflow - after EVERY experiment round write a Vietnamese report.md in the fixed 3-part template (Tổng quan / Nội dung chi tiết / Kết luận) plus a report.html that visualizes error clusters; both generated from eval.json.
+description: Report contract for the AI pipeline workflow - after EVERY experiment round write a Vietnamese report.md in the fixed 3-part template (Tổng quan / Nội dung chi tiết / Kết luận) plus a report.html that visualizes error clusters (both from eval.json), and after every training round archive three HTML docs - data_report.html (thống kê dữ liệu), method_report.html (phương pháp nghiên cứu), results_report.html (kết quả nghiên cứu) - from templates/round_*_report.template.html.
 ---
 
 # Reports
@@ -19,6 +19,23 @@ Do not narrate the execution diary and do not paste long logs: keep only numbers
 
 ## report.html
 Focused on **visualizing the error clusters** (distribution bars, one card per cluster with cause and concrete examples; optional `image` per example). Not a copy of the md.
+
+## Lưu trữ sau mỗi round huấn luyện thử nghiệm: thống kê dữ liệu · phương pháp · kết quả
+
+Sau **mỗi round train thử nghiệm** (kể cả round thất bại hoặc bị revert), ngoài `report.md` + `report.html`, phải lưu thêm 3 tài liệu HTML độc lập vào cùng `runs/<id>/reports/round-NN-<slug>/` theo mẫu trong `templates/`:
+
+| File | Mẫu | Nội dung |
+|---|---|---|
+| `data_report.html` | `round_data_report.template.html` | Thông tin bộ dữ liệu + cách gán nhãn · cấu trúc thư mục · số lượng train/val/test · phân phối (train vs test, label) · ảnh/mẫu minh họa. Dữ liệu kế thừa version trước thì ghi rõ phần thay đổi (khối `.note`) |
+| `method_report.html` | `round_method_report.template.html` | Tên phương pháp · bài toán + khó khăn có chẩn đoán · cải tiến so với cách cũ · sơ đồ train/inference · loss + metric · bảng so sánh với phương pháp khác (cùng tập, cùng script chấm) · references |
+| `results_report.html` | `round_results_report.template.html` | Bảng đầu trang (project, version, ngày, tác giả) · Conclusions (Achievements / Methods / Difficulties & next plans) · bảng Experiments so các version (cột metric, strategy, config, input, augmentation; ô tốt nhất/kém nhất tô màu) · Bad cases · Good cases · Attached files · Checklist release |
+
+Quy trình:
+1. `python scripts/round_docs.py init <round_dir> --set ROUND_TITLE="..." --set PROJECT="..." --set VERSION="..."` (sinh 3 file, không ghi đè file đã có; `--force` để ghi đè).
+2. Điền từng placeholder `{{KEY}}` và xoá các khối `.hint` bằng **số liệu đã đo** từ `eval.json`, `notebook/`, log train; chưa đo thì `N/A`, không suy diễn. Thêm/bớt hàng, cột theo thực tế round.
+3. `python scripts/round_docs.py check <round_dir>` phải `OK` (đủ 3 file, không còn placeholder) rồi mới coi round là xong và được sang round sau.
+
+Quy tắc nội dung: số liệu so sánh phải cùng tập đánh giá + cùng metric + cùng script chấm; test khoá chỉ báo ở bước cuối; version đã revert vẫn ghi lý do bỏ ở *Difficulties*; không đưa mật khẩu/secret hay dữ liệu nhạy cảm vào HTML (ảnh minh họa phải đã được phép dùng); sơ đồ dùng skill `ai-pipeline-diagram`. Ba file tự đủ để người khác hiểu round mà không cần đọc nhật ký: ghi vào sổ thí nghiệm (`ai-pipeline-notebook`) đường dẫn tới chúng.
 
 ## Sơ đồ pipeline / kiến trúc mô hình (tùy chọn, khuyến khích)
 
