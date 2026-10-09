@@ -10,7 +10,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
-from ai_pipeline import updater  # noqa: E402
+from ai_pipeline import __version__, updater  # noqa: E402
 
 
 def cli(*args, env_extra=None):
@@ -69,7 +69,7 @@ class UpdateFromGit(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         base = Path(self.tmp.name)
-        self.repo = make_repo(base / "repo", {"1.0.0": "1.0.0", "1.1.0": "1.1.0", "1.2.0.rc": "1.2.0.rc"})
+        self.repo = make_repo(base / "repo", {"90.0.0": "90.0.0", "91.0.0": "91.0.0", "92.0.0.rc": "92.0.0.rc"})
         self.proj = base / "proj"
         self.proj.mkdir()
         rc, out = cli("init", str(self.proj), "--agent", "claude")
@@ -84,31 +84,31 @@ class UpdateFromGit(unittest.TestCase):
     def test_default_picks_latest_stable(self):
         rc, out = cli("update", str(self.proj), "--repo", self.repo)
         self.assertEqual(rc, 0, out)
-        self.assertEqual(self.installed("skills/demo/SKILL.md"), "demo 1.1.0")
+        self.assertEqual(self.installed("skills/demo/SKILL.md"), "demo 91.0.0")
         manifest = json.loads((self.proj / ".ai-pipeline.json").read_text(encoding="utf-8"))
-        self.assertEqual(manifest["version"], "1.1.0")
+        self.assertEqual(manifest["version"], "91.0.0")
 
     def test_pre_picks_rc(self):
         rc, out = cli("update", str(self.proj), "--repo", self.repo, "--pre")
         self.assertEqual(rc, 0, out)
-        self.assertEqual(self.installed("skills/demo/SKILL.md"), "demo 1.2.0.rc")
+        self.assertEqual(self.installed("skills/demo/SKILL.md"), "demo 92.0.0.rc")
 
     def test_ref_forces_tag(self):
-        rc, out = cli("update", str(self.proj), "--repo", self.repo, "--ref", "1.0.0")
+        rc, out = cli("update", str(self.proj), "--repo", self.repo, "--ref", "90.0.0")
         self.assertEqual(rc, 0, out)
-        self.assertEqual(self.installed("skills/demo/SKILL.md"), "demo 1.0.0")
+        self.assertEqual(self.installed("skills/demo/SKILL.md"), "demo 90.0.0")
 
     def test_env_repo(self):
         rc, out = cli("update", str(self.proj), env_extra={updater.REPO_ENV: self.repo})
         self.assertEqual(rc, 0, out)
-        self.assertEqual(self.installed("skills/demo/SKILL.md"), "demo 1.1.0")
+        self.assertEqual(self.installed("skills/demo/SKILL.md"), "demo 91.0.0")
 
     def test_check_writes_nothing(self):
         before = tree(self.proj)
         rc, out = cli("update", str(self.proj), "--repo", self.repo, "--check")
         self.assertEqual(rc, 0, out)
-        self.assertIn("1.1.0", out)
-        self.assertIn("1.0.0.rc", out)
+        self.assertIn("91.0.0", out)
+        self.assertIn(__version__, out)
         self.assertEqual(tree(self.proj), before)
 
     def test_already_latest_is_noop(self):
@@ -120,7 +120,7 @@ class UpdateFromGit(unittest.TestCase):
         self.assertEqual(tree(self.proj), before)
 
     def test_user_edit_kept_with_new_file(self):
-        rc, out = cli("update", str(self.proj), "--repo", self.repo, "--ref", "1.0.0")
+        rc, out = cli("update", str(self.proj), "--repo", self.repo, "--ref", "90.0.0")
         self.assertEqual(rc, 0, out)
         crit = self.proj / "roles" / "critic.md"
         crit.write_text("user edited\n", encoding="utf-8")
@@ -128,7 +128,7 @@ class UpdateFromGit(unittest.TestCase):
         self.assertEqual(rc, 0, out)
         self.assertIn("conflict", out)
         self.assertEqual(crit.read_text(encoding="utf-8"), "user edited\n")
-        self.assertEqual((self.proj / "roles" / "critic.md.new").read_text(encoding="utf-8").strip(), "critic 1.1.0")
+        self.assertEqual((self.proj / "roles" / "critic.md.new").read_text(encoding="utf-8").strip(), "critic 91.0.0")
 
     def test_bad_ref_fails_clean(self):
         before = tree(self.proj)
