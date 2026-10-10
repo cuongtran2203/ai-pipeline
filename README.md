@@ -106,16 +106,17 @@ Ví dụ thực tế: bài timesheet OCR có mục tiêu 99%/field vượt ceili
 
 ## Phiên bản
 
-Bản mới nhất: **`1.1.0`** (Orca, stable, nhánh `master`, bản này) và **`1.1.0.rc`** (Herdr, release candidate, nhánh `herdr`). Cả hai có cùng tính năng mới: `ai-pipeline update` lấy bản mới từ git, 3 tài liệu HTML sau mỗi round, cổng `require_round_docs`.
+Bản mới nhất: **`1.1.1`** (Orca, stable, nhánh `master`/`main`, bản này) và **`1.1.1.rc`** (Herdr, release candidate, nhánh `herdr`). `1.1.1` là bản vá README/cài đặt của `1.1.0`. Cả hai có cùng tính năng mới: `ai-pipeline update` lấy bản mới từ git, 3 tài liệu HTML sau mỗi round, cổng `require_round_docs`.
 
 | Tag | Runtime | Ghi chú |
 |---|---|---|
-| `1.1.0` | [Orca](https://github.com/stablyai/orca) | **bản này.** Stable, điều phối worker bằng Orca |
-| `1.1.0.rc` | [Herdr](https://github.com/herdrdev/herdr) | release candidate, điều phối bằng Herdr (`git checkout 1.1.0.rc`, README riêng ở nhánh `herdr`) |
-| `1.0.0.rc` | Herdr | release candidate Herdr đầu tiên, đã được `1.1.0.rc` thay thế |
+| `1.1.1` | [Orca](https://github.com/stablyai/orca) | **bản này.** Stable, điều phối worker bằng Orca |
+| `1.1.1.rc` | [Herdr](https://github.com/herdrdev/herdr) | release candidate, điều phối bằng Herdr (`git checkout 1.1.1.rc`, README riêng ở nhánh `herdr`) |
+| `1.1.0` / `1.1.0.rc` | Orca / Herdr | bản trước, README chưa cập nhật; đã được bản vá 1.1.1 thay thế |
+| `1.0.0.rc` | Herdr | release candidate Herdr đầu tiên, đã được `1.1.1.rc` thay thế |
 | `1.0.0` | Orca | bản Orca trước khi có tính năng mới |
 
-`ai-pipeline update` mặc định chọn tag **stable** mới nhất, tức là `1.1.0` này; bản Herdr dùng `--ref 1.1.0.rc`.
+`ai-pipeline update` mặc định chọn tag **stable** mới nhất, tức là `1.1.1` này; bản Herdr dùng `--ref 1.1.1.rc`.
 
 ## Cách coordinator điều phối worker với Orca
 
@@ -240,10 +241,10 @@ Yêu cầu: Python ≥ 3.9 và git. Không có phụ thuộc Python nào khác.
 
 ```bash
 # khuyến nghị: pipx (cô lập, có lệnh ai-pipeline toàn cục)
-pipx install git+https://github.com/cuongtran2203/ai-pipeline@1.1.0
+pipx install git+https://github.com/cuongtran2203/ai-pipeline@1.1.1
 
 # hoặc pip
-pip install git+https://github.com/cuongtran2203/ai-pipeline@1.1.0
+pip install git+https://github.com/cuongtran2203/ai-pipeline@1.1.1
 
 # hoặc không cài, chạy thẳng từ bản clone
 git clone https://github.com/cuongtran2203/ai-pipeline && cd ai-pipeline
