@@ -106,16 +106,17 @@ Ví dụ thực tế: bài timesheet OCR có mục tiêu 99%/field vượt ceili
 
 ## Phiên bản
 
-Bản mới nhất: **`1.1.0`** (Orca, stable) và **`1.1.0.rc`** (Herdr, release candidate). Cả hai có cùng tính năng mới; khác nhau ở runtime điều phối.
+Bản mới nhất: **`1.1.1`** (Orca, stable) và **`1.1.1.rc`** (Herdr, release candidate; bản vá README/cài đặt của 1.1.0). Cả hai có cùng tính năng mới; khác nhau ở runtime điều phối.
 
 | Tag | Runtime | Ghi chú |
 |---|---|---|
-| `1.1.0.rc` | [Herdr](https://github.com/herdrdev/herdr) | **nhánh `herdr`, bản này.** `ai-pipeline update` lấy bản mới từ git; sau mỗi round train lưu `data_report.html` / `method_report.html` / `results_report.html`; cổng `require_round_docs`. Chạy thật 2 worker song song trên herdr 0.9.3 + claude (Windows); chưa kiểm macOS và Herdr thật trên Linux. Máy mới: `python scripts/herdr_rt.py verify` rồi `python scripts/agent_roster.py probe <agent>` |
-| `1.1.0` | [Orca](https://github.com/stablyai/orca) | bản stable (nhánh `master`): cùng tính năng mới nhưng điều phối bằng Orca (`git checkout 1.1.0`) |
-| `1.0.0.rc` | Herdr | release candidate đầu tiên của Herdr, đã được `1.1.0.rc` thay thế |
+| `1.1.1.rc` | [Herdr](https://github.com/herdrdev/herdr) | **nhánh `herdr`, bản này.** `ai-pipeline update` lấy bản mới từ git; sau mỗi round train lưu `data_report.html` / `method_report.html` / `results_report.html`; cổng `require_round_docs`. Chạy thật 2 worker song song trên herdr 0.9.3 + claude (Windows); chưa kiểm macOS và Herdr thật trên Linux. Máy mới: `python scripts/herdr_rt.py verify` rồi `python scripts/agent_roster.py probe <agent>` |
+| `1.1.1` | [Orca](https://github.com/stablyai/orca) | bản stable (nhánh `master`, `main`): cùng tính năng mới nhưng điều phối bằng Orca (`git checkout 1.1.1`) |
+| `1.1.0.rc` / `1.1.0` | Herdr / Orca | bản trước, README chưa cập nhật; đã được bản vá 1.1.1 thay thế |
+| `1.0.0.rc` | Herdr | release candidate đầu tiên của Herdr, đã được `1.1.1.rc` thay thế |
 | `1.0.0` | Orca | bản Orca trước khi có tính năng mới |
 
-`ai-pipeline update` mặc định chỉ chọn tag **stable** mới nhất (hiện là `1.1.0`, Orca). Muốn ở lại Herdr: `ai-pipeline update --ref 1.1.0.rc` (hoặc `--pre`).
+`ai-pipeline update` mặc định chỉ chọn tag **stable** mới nhất (hiện là `1.1.1`, Orca). Muốn ở lại Herdr: `ai-pipeline update --ref 1.1.1.rc` (hoặc `--pre`).
 
 Khác biệt chính: Herdr không có task DAG/`worker_done`/`ask` nên run, task, worker_done và ask là file trong `runs/<id>/` (`tasks/`, `workers/`, `worker_done/`, `asks/`); mỗi worker chạy trong tab/pane riêng + git worktree riêng; không còn auto-release (dùng `worker-release`).
 
@@ -242,10 +243,10 @@ Yêu cầu: Python ≥ 3.9 và git. Không có phụ thuộc Python nào khác.
 
 ```bash
 # khuyến nghị: pipx (cô lập, có lệnh ai-pipeline toàn cục)
-pipx install git+https://github.com/cuongtran2203/ai-pipeline@1.1.0.rc    # Herdr; @1.1.0 cho bản Orca
+pipx install git+https://github.com/cuongtran2203/ai-pipeline@1.1.1.rc    # Herdr; @1.1.1 cho bản Orca
 
 # hoặc pip
-pip install git+https://github.com/cuongtran2203/ai-pipeline@1.1.0.rc
+pip install git+https://github.com/cuongtran2203/ai-pipeline@1.1.1.rc
 
 # hoặc không cài, chạy thẳng từ bản clone
 git clone https://github.com/cuongtran2203/ai-pipeline && cd ai-pipeline
