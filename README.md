@@ -2,7 +2,7 @@
 
 Workflow đa agent cho dự án AI: **file spec → kế hoạch → thực thi song song**, chạy được trên **Claude Code** và **Codex**, điều phối bằng **[Herdr](https://github.com/herdrdev/herdr)**. `ai-pipeline` là CLI cài workflow này vào **bất kỳ project nào** (Linux, macOS, Windows) mà không đụng tới file của bạn.
 
-Nguyên tắc: data trước, không làm phức tạp hoá, ước lượng giới hạn khả thi trước khi tối ưu, mọi thí nghiệm có `report.md` + `report.html`, người duyệt ở 3 cổng G1/G2/G3, mọi việc chạy trong sandbox container.
+Nguyên tắc: data trước, không làm phức tạp hoá, ước lượng giới hạn khả thi trước khi tối ưu, mọi thí nghiệm có `report.md` + `report.html`, mỗi round train lưu thêm 3 tài liệu thống kê dữ liệu / phương pháp / kết quả, người duyệt ở 3 cổng G1/G2/G3, mọi việc chạy trong sandbox container.
 
 ## Quy trình sản xuất pipeline AI (tổng quan)
 
@@ -57,6 +57,23 @@ flowchart TD
     M --> N(["Release + báo cáo cuối"])
 ```
 
+## Lưu trữ sau mỗi round train
+
+Sau mỗi round huấn luyện thử nghiệm (kể cả round thất bại hoặc bị revert), ngoài `report.md` + `report.html`, lưu 3 tài liệu HTML vào `runs/<id>/reports/round-NN-<slug>/` theo mẫu `templates/round_*_report.template.html`:
+
+| File | Nội dung |
+|---|---|
+| `data_report.html` | thông tin dữ liệu và cách gán nhãn, cấu trúc thư mục, số lượng train/val/test, phân phối train so với test, ảnh minh họa |
+| `method_report.html` | phương pháp và khó khăn có chẩn đoán, cải tiến so với cách cũ, sơ đồ train/inference, loss và metric, so sánh với phương pháp khác, references |
+| `results_report.html` | Achievements / Methods / Difficulties và kế hoạch tiếp, bảng so các version, bad cases và good cases, checklist release |
+
+```bash
+python scripts/round_docs.py init runs/<id>/reports/round-01-x --set ROUND_TITLE="..." --set VERSION="..."
+python scripts/round_docs.py check runs/<id>/reports/round-01-x    # đủ 3 file, hết placeholder {{...}}
+```
+
+Với `"require_round_docs": true` trong `optimize_policy.json` (mặc định cho run mới), `optimize.py record` từ chối round thiếu tài liệu và `project_status` báo thiếu; policy cũ không có khóa này thì giữ hành vi cũ. Số liệu chưa đo ghi `N/A`.
+
 ## Chẩn đoán thành phần yếu (trước khi sửa)
 
 Không sửa theo cảm tính. Khi một thành phần dưới mục tiêu, agent `weakness-diagnostician` chạy thí nghiệm phân biệt nguyên nhân, rồi chọn nhánh hành động trong playbook đã được duyệt ở G2.
@@ -89,12 +106,16 @@ Ví dụ thực tế: bài timesheet OCR có mục tiêu 99%/field vượt ceili
 
 ## Phiên bản
 
+Bản mới nhất: **`1.1.0`** (Orca, stable) và **`1.1.0.rc`** (Herdr, release candidate). Cả hai có cùng tính năng mới; khác nhau ở runtime điều phối.
+
 | Tag | Runtime | Ghi chú |
 |---|---|---|
-| `1.0.0` | [Orca](https://github.com/stablyai/orca) | bản ổn định cuối dùng Orca (`git checkout 1.0.0`) |
-| `1.1.0` | [Orca](https://github.com/stablyai/orca) | bản ổn định Orca có tính năng mới: `ai-pipeline update` lấy bản mới từ git, 3 tài liệu HTML sau mỗi round, cổng `require_round_docs` (`git checkout 1.1.0`) |
-| `1.1.0.rc` | [Herdr](https://github.com/herdrdev/herdr) | release candidate Herdr: `ai-pipeline update` lấy bản mới từ git, lưu 3 tài liệu HTML (dữ liệu/phương pháp/kết quả) sau mỗi round, cổng `require_round_docs`; chạy `python scripts/herdr_rt.py verify` trên máy mới |
-| `1.0.0.rc` | [Herdr](https://github.com/herdrdev/herdr) | release candidate (đã được `1.1.0.rc` thay thế): `plan_to_herdr.py`, `herdr_rt.py`, `worker_done.py`; đã chạy thật với herdr 0.9.3 + claude (`agent_roster.py probe claude` đạt); chạy `python scripts/herdr_rt.py verify` trên máy mới |
+| `1.1.0.rc` | [Herdr](https://github.com/herdrdev/herdr) | **nhánh `herdr`, bản này.** `ai-pipeline update` lấy bản mới từ git; sau mỗi round train lưu `data_report.html` / `method_report.html` / `results_report.html`; cổng `require_round_docs`. Chạy thật 2 worker song song trên herdr 0.9.3 + claude (Windows); chưa kiểm macOS và Herdr thật trên Linux. Máy mới: `python scripts/herdr_rt.py verify` rồi `python scripts/agent_roster.py probe <agent>` |
+| `1.1.0` | [Orca](https://github.com/stablyai/orca) | bản stable (nhánh `master`): cùng tính năng mới nhưng điều phối bằng Orca (`git checkout 1.1.0`) |
+| `1.0.0.rc` | Herdr | release candidate đầu tiên của Herdr, đã được `1.1.0.rc` thay thế |
+| `1.0.0` | Orca | bản Orca trước khi có tính năng mới |
+
+`ai-pipeline update` mặc định chỉ chọn tag **stable** mới nhất (hiện là `1.1.0`, Orca). Muốn ở lại Herdr: `ai-pipeline update --ref 1.1.0.rc` (hoặc `--pre`).
 
 Khác biệt chính: Herdr không có task DAG/`worker_done`/`ask` nên run, task, worker_done và ask là file trong `runs/<id>/` (`tasks/`, `workers/`, `worker_done/`, `asks/`); mỗi worker chạy trong tab/pane riêng + git worktree riêng; không còn auto-release (dùng `worker-release`).
 
@@ -221,15 +242,17 @@ Yêu cầu: Python ≥ 3.9 và git. Không có phụ thuộc Python nào khác.
 
 ```bash
 # khuyến nghị: pipx (cô lập, có lệnh ai-pipeline toàn cục)
-pipx install git+https://github.com/cuongtran2203/ai-pipeline
+pipx install git+https://github.com/cuongtran2203/ai-pipeline@1.1.0.rc    # Herdr; @1.1.0 cho bản Orca
 
 # hoặc pip
-pip install git+https://github.com/cuongtran2203/ai-pipeline
+pip install git+https://github.com/cuongtran2203/ai-pipeline@1.1.0.rc
 
 # hoặc không cài, chạy thẳng từ bản clone
 git clone https://github.com/cuongtran2203/ai-pipeline && cd ai-pipeline
 python -m ai_pipeline --help
 ```
+
+Luôn chỉ rõ `@<tag>`: nhánh mặc định `main` trên GitHub là lịch sử cũ (v0.5.0), không chứa các bản trên.
 
 Để chạy worker song song cần thêm: [Herdr](https://github.com/herdrdev/herdr) (macOS/Linux: `curl -fsSL https://herdr.dev/install.sh | sh` hoặc `brew install herdr`; Windows: bộ cài standalone, thêm thư mục chứa `herdr.exe` vào PATH hoặc đặt `HERDR_CLI_COMMAND`; khởi động `herdr` một lần để có session). Trên macOS/Linux thường chỉ có `python3`: script tự dùng `python3` trong prompt worker và ít nhất một trong `claude` (Claude Code) / `codex`. Docker là tuỳ chọn (sandbox). `ai-pipeline doctor` kiểm tra tất cả.
 
@@ -248,6 +271,8 @@ Rồi mở thư mục bằng Claude Code hoặc Codex và nói:
 > Chạy ai-pipeline với spec `spec.md`
 
 Agent sẽ chạy skill `ai-pipeline`: validate spec → hỏi bạn ở G1/G2/G3 → tạo Run trên Herdr → chạy worker song song. Kết quả nằm ở `runs/<run_id>/`. Hỏi *"dự án đang ở bước nào"* để chạy skill `ai-pipeline-status`.
+
+Cập nhật framework sau này: `ai-pipeline update --check` xem có bản mới không, `ai-pipeline update` để lấy về (file bạn đã sửa được giữ, bản mới ghi ra `<file>.new`). Chi tiết ở mục *Lệnh*.
 
 ## `ai-pipeline init` KHÔNG ghi đè hay sửa file của bạn
 
@@ -321,7 +346,7 @@ skills/                  23 skill: ai-pipeline, -intake, -analysis, -planning, -
 roles/                   prompt role dùng chung cho 2 runtime
 templates/  schemas/     spec, report, playbook, autonomy policy; plan/eval/kg schema
 scripts/                 validate_spec, plan_to_herdr, render_report, project_status, notebook, kg, seal,
-                         autonomy, supervisor, ... (chỉ cần Python stdlib)
+                         autonomy, supervisor, round_docs, ... (chỉ cần Python stdlib)
 .ai-pipeline.json        manifest (version + hash file đã cài)
 ```
 
@@ -335,7 +360,7 @@ scripts/                 validate_spec, plan_to_herdr, render_report, project_st
 ## Phát triển repo này
 
 ```bash
-python -m unittest discover -s tests     # 450+ test, stdlib
+python -m unittest discover -s tests     # 540 test, stdlib
 python scripts/evals.py run --static     # eval cấu hình agent (CI)
 python scripts/sync_skills.py --check    # skills/ là nguồn chuẩn, .claude/ và .agents/ là bản sao
 pip install .                            # build wheel (đóng gói skills/roles/... vào ai_pipeline/payload)
