@@ -95,7 +95,7 @@ class ExistingProject(unittest.TestCase):
         cli("init", str(self.t))
         crit = self.t / "roles/critic.md"
         crit.write_text("user edited\n", encoding="utf-8")
-        rc, out = cli("update", str(self.t))
+        rc, out = cli("update", "--offline", str(self.t))
         self.assertEqual(rc, 0, out)
         self.assertEqual(crit.read_text(encoding="utf-8"), "user edited\n")
         self.assertIn("conflict", out)

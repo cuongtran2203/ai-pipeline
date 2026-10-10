@@ -43,6 +43,7 @@ if sys.stderr.encoding != "utf-8":
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import statefile  # noqa: E402  (ghi state/append atomic + khoa)
+import round_docs  # noqa: E402  (check 3 tai lieu round: data/method/results)
 
 try:
     import kg  # noqa: E402  (single validated write API cho knowledge graph)
@@ -131,6 +132,9 @@ def default_policy(run_id=""):
         # Target mac dinh cho moi field chua co targets.<field> (vd. 0.99 trich tu
         # spec "moi field >= 99%"); null = thieu target -> STOP-hoi-nguoi.
         "default_target": None,
+        # Bat buoc 3 tai lieu round (data/method/results_report.html) truoc khi record.
+        # Policy cu thieu khoa = false (hanh vi cu).
+        "require_round_docs": True,
     }
 
 
@@ -240,7 +244,15 @@ def validate_policy(pol):
     if dft is not None and (not isinstance(dft, (int, float)) or isinstance(dft, bool)):
         errs.append("default_target phai la so hoac null "
                     "(target mac dinh cho moi field chua co targets.<field>)")
+    rrd = pol.get("require_round_docs")
+    if rrd is not None and not isinstance(rrd, bool):
+        errs.append("require_round_docs phai la true/false (bat buoc 3 tai lieu round "
+                    "data/method/results_report.html truoc khi record); thieu khoa = false")
     return errs
+
+
+def round_docs_required(policy):
+    return isinstance(policy, dict) and policy.get("require_round_docs") is True
 
 
 def validate_metrics_source(ms):
@@ -1067,7 +1079,7 @@ def decide_next(run_dir):
         return {"decision": STOP_ASK, "stop": True,
                 "reason": "khong con nhanh hanh dong nao (cac nhanh da bi bac bo): hoi nguoi",
                 "round": rnd, "tasks": []}
-    tasks.append(eval_task(rnd, agent, split))
+    tasks.append(eval_task(rnd, agent, split, round_docs_required(policy)))
     chain_deps(tasks)
     return {"decision": "GO", "stop": False,
             "reason": "vong %d cho %s" % (rnd, ", ".join(chosen)),
@@ -1387,8 +1399,19 @@ def tasks_for_verdict(rnd, field, latest, target, diag, verdict, agent, split, p
     return None
 
 
-def eval_task(rnd, agent, split):
+def eval_task(rnd, agent, split, require_docs=False):
     tid = "R%02d-eval" % rnd
+    outputs = ["runs/<id>/reports/round-%02d/eval.json" % rnd,
+               "runs/<id>/reports/round-%02d/report.md" % rnd,
+               "runs/<id>/reports/round-%02d/report.html" % rnd]
+    change = ("Danh gia e2e tren %s that (KHONG dung test) -> eval.json; "
+              "render report.md + report.html (render_report); " % split)
+    acceptance = "eval.json + report.md + report.html ton tai; rounds.jsonl co ban ghi round %d; predicted_gain=0.0 (do luong)" % rnd
+    if require_docs:
+        outputs += ["runs/<id>/reports/round-%02d/%s" % (rnd, n) for n in round_docs.DOCS]
+        change += ("tao 3 tai lieu round bang `python scripts/round_docs.py init <thu muc round>` roi dien het "
+                   "placeholder {{...}} (data_report.html, method_report.html, results_report.html); ")
+        acceptance += "; `python scripts/round_docs.py check runs/<id>/reports/round-%02d` OK (du 3 file, het placeholder)" % rnd
     return {
         "id": tid,
         "title": "R%02d: danh gia val/OOF + report + record" % rnd,
@@ -1400,14 +1423,10 @@ def eval_task(rnd, agent, split):
         "deps": [],
         "owns": ["runs/<run_id>/reports/round-%02d/" % rnd],
         "inputs": ["runs/<id>/artifacts/R%02d-*/" % rnd],
-        "outputs": ["runs/<id>/reports/round-%02d/eval.json" % rnd,
-                    "runs/<id>/reports/round-%02d/report.md" % rnd,
-                    "runs/<id>/reports/round-%02d/report.html" % rnd],
+        "outputs": outputs,
         "target": "do lai e2e tren %s that + bao cao" % split,
-        "change": ("Danh gia e2e tren %s that (KHONG dung test) -> eval.json; "
-                   "render report.md + report.html (render_report); "
-                   "chay `python scripts/optimize.py record <run_dir> --round %d --gpu-hours X`." % (split, rnd)),
-        "acceptance": "eval.json + report.md + report.html ton tai; rounds.jsonl co ban ghi round %d; predicted_gain=0.0 (do luong)" % rnd,
+        "change": change + "chay `python scripts/optimize.py record <run_dir> --round %d --gpu-hours X`." % rnd,
+        "acceptance": acceptance,
         "predicted_gain": 0.0,
         "hypothesis": "do luong vong %d (khong phai gia thuyet cai thien)" % rnd,
         "measure": "eval.json tren %s that + record round %d" % (split, rnd),
@@ -1623,7 +1642,7 @@ def _eval_digest(path):
     return h.hexdigest()
 
 
-def _check_bundle(newest, rnd):
+def _check_bundle(newest, rnd, policy=None):
     """Bo artifact bao cao: eval.json + report.md + report.html cung thu muc."""
     missing = [n for n in ("eval.json", "report.md", "report.html")
                if not os.path.isfile(os.path.join(newest, n))]
@@ -1636,6 +1655,14 @@ def _check_bundle(newest, rnd):
     base = os.path.basename(newest)
     if not base.startswith("round-"):
         raise OptimizeError("thu muc round '%s' sai ten (phai bat dau bang 'round-')" % base)
+    if round_docs_required(policy):
+        problems = round_docs.check(newest)
+        if problems:
+            raise OptimizeError(
+                "policy require_round_docs=true: record vong %d bi tu choi, 3 tai lieu round chua dat o %s: %s. "
+                "Tao bang `python scripts/round_docs.py init %s` roi dien het placeholder; "
+                "kiem lai bang `python scripts/round_docs.py check %s`" % (
+                    rnd, base, "; ".join(problems), newest, newest))
 
 
 def _resolve_gpu_hours(policy, newest, cli_val):
@@ -1787,7 +1814,7 @@ def record_round(run_dir, rnd, gpu_hours=None):
         ev_path = os.path.join(newest, "eval.json")
         if not os.path.isfile(ev_path):
             raise OptimizeError("thieu eval.json o %s" % newest)
-        _check_bundle(newest, rnd)
+        _check_bundle(newest, rnd, policy)
         digest = _eval_digest(ev_path)
         rounds = read_rounds(run_dir)
         existing = [r for r in rounds if r.get("round") == rnd]

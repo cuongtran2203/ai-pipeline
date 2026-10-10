@@ -59,6 +59,7 @@ Moi task co `predicted_gain` bat buoc (so du doan tang metric, do tren val/OOF).
 ## Record idempotent + crash-safe
 
 - `record` chay **duoi mot khoa theo run**: kiem round chua ghi + digest eval chua co, round khop `pending_round`, bo artifact day du (`eval.json` + `report.md` + `report.html` cung thu muc round, ten round dung) → moi ghi `rounds.jsonl` + `state.json`. Goi hai lan → lan hai tra "da ghi" (exit 0, khong ghi them).
+- **3 tai lieu round** (`require_round_docs`): policy co `"require_round_docs": true` (template run moi mac dinh true; policy cu thieu khoa = false, hanh vi cu; khoa phai la bool, sai kieu bi tu choi) thi `record` tu choi neu round thieu `data_report.html`/`method_report.html`/`results_report.html` hoac con placeholder `{{...}}` (tai dung `round_docs.py check`; thong bao neu ro file nao). Tao bang `python scripts/round_docs.py init <thu muc round>` roi dien het. Task `R<NN>-eval` do `next --apply` sinh se liet ke 3 file trong `outputs` + `acceptance`; `project_status.py` coi round chua du 3 file la thieu va goi y lenh.
 - Ghi KG/notebook sau; neu loi dat co `kg_pending` trong state + in lenh `optimize.py reconcile <run_dir>` (khong canh bao roi bo qua). Crash giua cac buoc: lan `record` sau tu hoan tat state nho digest.
 
 ## Cong duyet nguon du lieu ngoai (gate nguoi that)

@@ -103,6 +103,27 @@ def autonomy_summary(run_dir):
             "usage": frac, "warnings": warnings, "blocked": blocked}
 
 
+def round_docs_gap(run_dir):
+    """Round chua du 3 tai lieu (data/method/results_report.html); chi khi optimize_policy bat require_round_docs.
+
+    Tra (bat, {ten_round: [van de]}). Policy cu thieu khoa/khong hop le = tat (hanh vi cu).
+    """
+    pol = jload(os.path.join(run_dir, "optimize_policy.json"), None)
+    if not isinstance(pol, dict) or pol.get("require_round_docs") is not True:
+        return False, {}
+    try:
+        import round_docs
+    except ImportError:
+        return True, {}
+    gap = {}
+    for d in sorted(glob.glob(os.path.join(run_dir, "reports", "round-*"))):
+        if os.path.isdir(d):
+            problems = round_docs.check(d)
+            if problems:
+                gap[os.path.basename(d)] = problems
+    return True, gap
+
+
 def spec_ok(spec):
     r = subprocess.run([sys.executable, os.path.join(ROOT, "scripts", "validate_spec.py"), spec, "--json"],
                        capture_output=True, text=True, encoding="utf-8")
@@ -220,6 +241,15 @@ def assess(run_dir):
     else:
         phase = 6
         actions.append("Hoàn tất. Chỉ cần tổng kết báo cáo cuối cho người dùng.")
+
+    req_docs, docs_gap = round_docs_gap(run_dir)
+    ev["round_docs"] = {"required": req_docs, "incomplete": docs_gap}
+    for rname, problems in docs_gap.items():
+        actions.insert(0, f"Round '{rname}' chưa đủ 3 tài liệu round ({'; '.join(problems)}) → "
+                          f"python scripts/round_docs.py init {os.path.join(run_dir, 'reports', rname)} rồi điền hết placeholder, "
+                          f"kiểm bằng round_docs.py check (policy require_round_docs)")
+        if "round_docs" not in blocked:
+            blocked.append("round_docs")
 
     if ceil_block:
         actions.insert(0, ceil_block)
