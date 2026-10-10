@@ -2,7 +2,7 @@
 
 Workflow đa agent cho dự án AI: **file spec → kế hoạch → thực thi song song**, chạy được trên **Claude Code** và **Codex**, điều phối bằng **[Orca](https://github.com/stablyai/orca)**. `ai-pipeline` là CLI cài workflow này vào **bất kỳ project nào** (Linux, macOS, Windows) mà không đụng tới file của bạn.
 
-Nguyên tắc: data trước, không làm phức tạp hoá, ước lượng giới hạn khả thi trước khi tối ưu, mọi thí nghiệm có `report.md` + `report.html`, người duyệt ở 3 cổng G1/G2/G3, mọi việc chạy trong sandbox container.
+Nguyên tắc: data trước, không làm phức tạp hoá, ước lượng giới hạn khả thi trước khi tối ưu, mọi thí nghiệm có `report.md` + `report.html`, mỗi round train lưu thêm 3 tài liệu thống kê dữ liệu / phương pháp / kết quả, người duyệt ở 3 cổng G1/G2/G3, mọi việc chạy trong sandbox container.
 
 ## Quy trình sản xuất pipeline AI (tổng quan)
 
@@ -57,6 +57,23 @@ flowchart TD
     M --> N(["Release + báo cáo cuối"])
 ```
 
+## Lưu trữ sau mỗi round train
+
+Sau mỗi round huấn luyện thử nghiệm (kể cả round thất bại hoặc bị revert), ngoài `report.md` + `report.html`, lưu 3 tài liệu HTML vào `runs/<id>/reports/round-NN-<slug>/` theo mẫu `templates/round_*_report.template.html`:
+
+| File | Nội dung |
+|---|---|
+| `data_report.html` | thông tin dữ liệu và cách gán nhãn, cấu trúc thư mục, số lượng train/val/test, phân phối train so với test, ảnh minh họa |
+| `method_report.html` | phương pháp và khó khăn có chẩn đoán, cải tiến so với cách cũ, sơ đồ train/inference, loss và metric, so sánh với phương pháp khác, references |
+| `results_report.html` | Achievements / Methods / Difficulties và kế hoạch tiếp, bảng so các version, bad cases và good cases, checklist release |
+
+```bash
+python scripts/round_docs.py init runs/<id>/reports/round-01-x --set ROUND_TITLE="..." --set VERSION="..."
+python scripts/round_docs.py check runs/<id>/reports/round-01-x    # đủ 3 file, hết placeholder {{...}}
+```
+
+Với `"require_round_docs": true` trong `optimize_policy.json` (mặc định cho run mới), `optimize.py record` từ chối round thiếu tài liệu và `project_status` báo thiếu; policy cũ không có khóa này thì giữ hành vi cũ. Số liệu chưa đo ghi `N/A`.
+
 ## Chẩn đoán thành phần yếu (trước khi sửa)
 
 Không sửa theo cảm tính. Khi một thành phần dưới mục tiêu, agent `weakness-diagnostician` chạy thí nghiệm phân biệt nguyên nhân, rồi chọn nhánh hành động trong playbook đã được duyệt ở G2.
@@ -86,6 +103,19 @@ flowchart TD
 ```
 
 Ví dụ thực tế: bài timesheet OCR có mục tiêu 99%/field vượt ceiling; thí nghiệm bác bỏ giả thuyết "sinh data tổng hợp giúp được" và "thêm module tách ô giúp được", nên pipeline dừng vòng lặp thay vì chạy mãi.
+
+## Phiên bản
+
+Bản mới nhất: **`1.1.0`** (Orca, stable, nhánh `master`, bản này) và **`1.1.0.rc`** (Herdr, release candidate, nhánh `herdr`). Cả hai có cùng tính năng mới: `ai-pipeline update` lấy bản mới từ git, 3 tài liệu HTML sau mỗi round, cổng `require_round_docs`.
+
+| Tag | Runtime | Ghi chú |
+|---|---|---|
+| `1.1.0` | [Orca](https://github.com/stablyai/orca) | **bản này.** Stable, điều phối worker bằng Orca |
+| `1.1.0.rc` | [Herdr](https://github.com/herdrdev/herdr) | release candidate, điều phối bằng Herdr (`git checkout 1.1.0.rc`, README riêng ở nhánh `herdr`) |
+| `1.0.0.rc` | Herdr | release candidate Herdr đầu tiên, đã được `1.1.0.rc` thay thế |
+| `1.0.0` | Orca | bản Orca trước khi có tính năng mới |
+
+`ai-pipeline update` mặc định chọn tag **stable** mới nhất, tức là `1.1.0` này; bản Herdr dùng `--ref 1.1.0.rc`.
 
 ## Cách coordinator điều phối worker với Orca
 
@@ -210,15 +240,17 @@ Yêu cầu: Python ≥ 3.9 và git. Không có phụ thuộc Python nào khác.
 
 ```bash
 # khuyến nghị: pipx (cô lập, có lệnh ai-pipeline toàn cục)
-pipx install git+https://github.com/cuongtran2203/ai-pipeline
+pipx install git+https://github.com/cuongtran2203/ai-pipeline@1.1.0
 
 # hoặc pip
-pip install git+https://github.com/cuongtran2203/ai-pipeline
+pip install git+https://github.com/cuongtran2203/ai-pipeline@1.1.0
 
 # hoặc không cài, chạy thẳng từ bản clone
 git clone https://github.com/cuongtran2203/ai-pipeline && cd ai-pipeline
 python -m ai_pipeline --help
 ```
+
+Luôn chỉ rõ `@<tag>`: nhánh mặc định `main` trên GitHub là lịch sử cũ (v0.5.0), không chứa các bản này.
 
 Để chạy worker song song cần thêm: [Orca](https://github.com/stablyai/orca) và ít nhất một trong `claude` (Claude Code) / `codex`. Docker là tuỳ chọn (sandbox). `ai-pipeline doctor` kiểm tra tất cả.
 
@@ -237,6 +269,8 @@ Rồi mở thư mục bằng Claude Code hoặc Codex và nói:
 > Chạy ai-pipeline với spec `spec.md`
 
 Agent sẽ chạy skill `ai-pipeline`: validate spec → hỏi bạn ở G1/G2/G3 → tạo Run trên Orca → chạy worker song song. Kết quả nằm ở `runs/<run_id>/`. Hỏi *"dự án đang ở bước nào"* để chạy skill `ai-pipeline-status`.
+
+Cập nhật framework sau này: `ai-pipeline update --check` xem có bản mới không, `ai-pipeline update` để lấy về (file bạn đã sửa được giữ, bản mới ghi ra `<file>.new`). Chi tiết ở mục *Lệnh*.
 
 ## `ai-pipeline init` KHÔNG ghi đè hay sửa file của bạn
 
@@ -310,7 +344,7 @@ skills/                  23 skill: ai-pipeline, -intake, -analysis, -planning, -
 roles/                   prompt role dùng chung cho 2 runtime
 templates/  schemas/     spec, report, playbook, autonomy policy; plan/eval/kg schema
 scripts/                 validate_spec, plan_to_orca, render_report, project_status, notebook, kg, seal,
-                         autonomy, supervisor, ... (chỉ cần Python stdlib)
+                         autonomy, supervisor, round_docs, ... (chỉ cần Python stdlib)
 .ai-pipeline.json        manifest (version + hash file đã cài)
 ```
 
@@ -324,7 +358,7 @@ scripts/                 validate_spec, plan_to_orca, render_report, project_sta
 ## Phát triển repo này
 
 ```bash
-python -m unittest discover -s tests     # 450+ test, stdlib
+python -m unittest discover -s tests     # 535 test, stdlib
 python scripts/evals.py run --static     # eval cấu hình agent (CI)
 python scripts/sync_skills.py --check    # skills/ là nguồn chuẩn, .claude/ và .agents/ là bản sao
 pip install .                            # build wheel (đóng gói skills/roles/... vào ai_pipeline/payload)
