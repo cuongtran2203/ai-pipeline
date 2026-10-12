@@ -103,6 +103,15 @@ def autonomy_summary(run_dir):
             "usage": frac, "warnings": warnings, "blocked": blocked}
 
 
+def tech_report_gap(run_dir):
+    """Van de cua technical report cua ca du an (rong = dat). Chi nhac o giai doan release, khong chan."""
+    try:
+        import tech_report
+    except ImportError:
+        return []
+    return tech_report.check(run_dir)
+
+
 def round_docs_gap(run_dir):
     """Round chua du 3 tai lieu (data/method/results_report.html); chi khi optimize_policy bat require_round_docs.
 
@@ -241,6 +250,12 @@ def assess(run_dir):
     else:
         phase = 6
         actions.append("Hoàn tất. Chỉ cần tổng kết báo cáo cuối cho người dùng.")
+        tr = tech_report_gap(run_dir)
+        ev["tech_report"] = tr
+        if tr:
+            actions.insert(0, "Chưa có technical report đạt cho cả dự án (" + "; ".join(tr[:3]) + ") → "
+                              f"python scripts/tech_report.py init {run_dir} rồi viết theo skills/ai-pipeline-report/paper_writing_guide.md, "
+                              f"kiểm bằng tech_report.py check")
 
     req_docs, docs_gap = round_docs_gap(run_dir)
     ev["round_docs"] = {"required": req_docs, "incomplete": docs_gap}

@@ -1,6 +1,6 @@
 ---
 name: ai-pipeline-report
-description: Report contract for the AI pipeline workflow - after EVERY experiment round write a Vietnamese report.md in the fixed 3-part template (Tổng quan / Nội dung chi tiết / Kết luận) plus a report.html that visualizes error clusters (both from eval.json), and after every training round archive three HTML docs - data_report.html (thống kê dữ liệu), method_report.html (phương pháp nghiên cứu), results_report.html (kết quả nghiên cứu) - from templates/round_*_report.template.html.
+description: Report contract for the AI pipeline workflow - after EVERY experiment round write a Vietnamese report.md in the fixed 3-part template (Tổng quan / Nội dung chi tiết / Kết luận) plus a report.html that visualizes error clusters (both from eval.json), and after every training round archive three HTML docs - data_report.html (thống kê dữ liệu), method_report.html (phương pháp nghiên cứu), results_report.html (kết quả nghiên cứu) - from templates/round_*_report.template.html; and when the whole research & development ends write ONE project-wide technical report (scientific-paper style) with scripts/tech_report.py.
 ---
 
 # Reports
@@ -36,6 +36,21 @@ Quy trình:
 3. `python scripts/round_docs.py check <round_dir>` phải `OK` (đủ 3 file, không còn placeholder) rồi mới coi round là xong và được sang round sau.
 
 Quy tắc nội dung: số liệu so sánh phải cùng tập đánh giá + cùng metric + cùng script chấm; test khoá chỉ báo ở bước cuối; version đã revert vẫn ghi lý do bỏ ở *Difficulties*; không đưa mật khẩu/secret hay dữ liệu nhạy cảm vào HTML (ảnh minh họa phải đã được phép dùng); sơ đồ dùng skill `ai-pipeline-diagram`. Ba file tự đủ để người khác hiểu round mà không cần đọc nhật ký: ghi vào sổ thí nghiệm (`ai-pipeline-notebook`) đường dẫn tới chúng.
+
+## Technical report cho cả dự án (khi kết thúc nghiên cứu và phát triển)
+
+Khi quá trình nghiên cứu & phát triển **kết thúc** (đạt chỉ tiêu và đã release, hoặc dừng do ceiling / hết hiệu quả cận biên / hết vòng / hết ngân sách / người dùng chốt), viết **một** báo cáo kỹ thuật cho cả dự án, theo dạng bài báo khoa học tiếng Việt, ngoài các báo cáo từng round. Đây là tài liệu tổng hợp để người ngoài hiểu bài toán, phương pháp, kết quả và giới hạn mà không cần đọc nhật ký; các round (kể cả thất bại) là nguồn dữ liệu của nó.
+
+| Việc | Công cụ |
+|---|---|
+| Mẫu | `templates/technical_report.template.md` (Tóm tắt · 1 Giới thiệu · 2 Nghiên cứu liên quan · 3 Phương pháp · 4 Thiết lập thực nghiệm · 5 Kết quả · 6 Thảo luận + Hạn chế · 7 Kết luận · 8 Thực nghiệm bổ sung/kết quả âm · Tài liệu tham khảo · Phụ lục A-D) |
+| Phương pháp viết | `skills/ai-pipeline-report/paper_writing_guide.md` (từ Research-Paper-Writing-Skills, MIT): một đoạn một thông điệp, reverse outline, claim-evidence, khuôn Tóm tắt V1/V2/V3, Phương pháp = thiết kế + động lực + ưu điểm, ba câu hỏi thực nghiệm, quy tắc bảng, tự rà soát năm chiều |
+| Sinh khung | `python scripts/tech_report.py init runs/<id> --set TITLE="..." --set AUTHORS="..." --set PROJECT="..." --set PERIOD="..."` → `runs/<id>/reports/technical_report.md` (không ghi đè; `--force`) |
+| Kiểm | `python scripts/tech_report.py check runs/<id>` phải `OK`: hết `{{...}}` và `<!-- HINT`, đủ mục bắt buộc, Phụ lục D có đủ khẳng định với trạng thái `Đã có bằng chứng...` hoặc `Cần bằng chứng: ...`, số liệu ở Tóm tắt có trong thân bài, mọi `round-*` có `report.md` + `report.html` |
+
+Quy trình: (1) gom nguồn: `requirements.md`, `analysis/`, `decisions.md`, `notebook/`, `reports/round-*` (md, eval.json, 3 tài liệu round), `release/`; (2) lập mini-outline và bảng khẳng định → bằng chứng; (3) viết Phương pháp + Thực nghiệm trước, Tóm tắt/Giới thiệu sau; (4) reverse outline từng mục; (5) tự rà soát năm chiều ở Phụ lục D, xử lý hết mục `cần sửa`; (6) `check` OK, báo người dùng đường dẫn và các khẳng định còn "Cần bằng chứng".
+
+Quy tắc: số liệu chỉ lấy từ file đã đo, chưa đo thì `N/A`; khẳng định thiếu bằng chứng thì giảm nhẹ hoặc bỏ khỏi Tóm tắt; kết quả âm/round bị revert vào Mục 8; test khoá chỉ báo nếu đã chấm đúng một lần ở bước cuối, chưa chấm thì nói rõ; không đưa secret/dữ liệu nhạy cảm; trích nguồn kèm giấy phép dữ liệu/mô hình; sơ đồ bằng `ai-pipeline-diagram`; ghi đường dẫn technical report vào sổ thí nghiệm. `project_status` ở giai đoạn release nhắc nếu chưa có hoặc `check` chưa đạt (không chặn run cũ).
 
 ## Sơ đồ pipeline / kiến trúc mô hình (tùy chọn, khuyến khích)
 
