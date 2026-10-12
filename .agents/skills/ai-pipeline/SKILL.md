@@ -34,7 +34,7 @@ At run start `python scripts/notebook.py init runs/<id> --title "<problem>"`. Wo
 4. **Module build**: first a cheap **B0 baseline probe (C1)**, then one module-dev worker per module, parallel by DAG → `ai-pipeline-module-dev`. **Gate G3** before any training: GPU server, GPU type, CUDA, framework (or open-source link).
 5. **Integration** (integrator, then error-analyst) → `ai-pipeline-integration`.
 6. **Optimize loop (BAT BUOC sau baseline, khong phai tuy chon)** → `ai-pipeline-optimize` (`python scripts/optimize.py init|status|next|record`): sau moi vong coordinator chay `optimize.py next` cho toi khi no tra STOP (5 dieu kien: dat target → `I-final` test khoa mot lan qua seal roi release; ceiling thap hon target hoac OBJECTIVE/NOISE → hoi nguoi; het hieu qua can bien; het max_rounds; het budget). Lap va phan tich loi chi tren val that hoac OOF; test khoa chi cham mot lan o cuoi.
-7. **Release**: package for the chosen deployment, final report via `ai-pipeline-report`.
+7. **Release**: package for the chosen deployment, final report via `ai-pipeline-report`. Khi kết thúc nghiên cứu & phát triển (đạt chỉ tiêu, hoặc dừng do ceiling/hết vòng/hết ngân sách) viết thêm technical report cho cả dự án: `python scripts/tech_report.py init|check runs/<id>` (skill `ai-pipeline-report`, mục "Technical report cho cả dự án").
 
 ## Steps
 1. `python scripts/validate_spec.py <spec> --json` → if questions remain, ask the human (G1), update the spec copy, re-validate.

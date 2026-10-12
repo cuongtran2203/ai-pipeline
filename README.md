@@ -74,6 +74,17 @@ python scripts/round_docs.py check runs/<id>/reports/round-01-x    # đủ 3 fil
 
 Với `"require_round_docs": true` trong `optimize_policy.json` (mặc định cho run mới), `optimize.py record` từ chối round thiếu tài liệu và `project_status` báo thiếu; policy cũ không có khóa này thì giữ hành vi cũ. Số liệu chưa đo ghi `N/A`.
 
+### Technical report cho cả dự án
+
+Khi kết thúc nghiên cứu & phát triển (đạt chỉ tiêu, hoặc dừng do ceiling / hết vòng / hết ngân sách), agent viết thêm **một** báo cáo kỹ thuật dạng bài báo khoa học tiếng Việt: Tóm tắt · Giới thiệu · Nghiên cứu liên quan · Phương pháp · Thiết lập thực nghiệm · Kết quả · Thảo luận và hạn chế · Kết luận · Kết quả âm · Tài liệu tham khảo · Phụ lục (có bảng đối chiếu khẳng định với bằng chứng). Cách viết dựa trên [Research-Paper-Writing-Skills](https://github.com/Master-cai/Research-Paper-Writing-Skills) (MIT), xem `skills/ai-pipeline-report/paper_writing_guide.md`.
+
+```bash
+python scripts/tech_report.py init runs/<id> --set TITLE="..." --set AUTHORS="..." --set PROJECT="..." --set PERIOD="..."
+python scripts/tech_report.py check runs/<id>    # hết {{...}}/HINT, đủ mục, số liệu ở Tóm tắt có trong thân bài, mọi round có report.md + report.html
+```
+
+`project_status` ở giai đoạn release nhắc nếu chưa có hoặc chưa đạt; run cũ không bị chặn.
+
 ## Chẩn đoán thành phần yếu (trước khi sửa)
 
 Không sửa theo cảm tính. Khi một thành phần dưới mục tiêu, agent `weakness-diagnostician` chạy thí nghiệm phân biệt nguyên nhân, rồi chọn nhánh hành động trong playbook đã được duyệt ở G2.
@@ -106,17 +117,18 @@ Ví dụ thực tế: bài timesheet OCR có mục tiêu 99%/field vượt ceili
 
 ## Phiên bản
 
-Bản mới nhất: **`1.1.1`** (Orca, stable) và **`1.1.1.rc`** (Herdr, release candidate; bản vá README/cài đặt của 1.1.0). Cả hai có cùng tính năng mới; khác nhau ở runtime điều phối.
+Bản mới nhất: **`1.2.0`** (Orca, stable) và **`1.2.0.rc`** (Herdr, release candidate). Cả hai có cùng tính năng mới (technical report cho cả dự án); khác nhau ở runtime điều phối.
 
 | Tag | Runtime | Ghi chú |
 |---|---|---|
-| `1.1.1.rc` | [Herdr](https://github.com/herdrdev/herdr) | **nhánh `herdr`, bản này.** `ai-pipeline update` lấy bản mới từ git; sau mỗi round train lưu `data_report.html` / `method_report.html` / `results_report.html`; cổng `require_round_docs`. Chạy thật 2 worker song song trên herdr 0.9.3 + claude (Windows); chưa kiểm macOS và Herdr thật trên Linux. Máy mới: `python scripts/herdr_rt.py verify` rồi `python scripts/agent_roster.py probe <agent>` |
-| `1.1.1` | [Orca](https://github.com/stablyai/orca) | bản stable (nhánh `master`, `main`): cùng tính năng mới nhưng điều phối bằng Orca (`git checkout 1.1.1`) |
-| `1.1.0.rc` / `1.1.0` | Herdr / Orca | bản trước, README chưa cập nhật; đã được bản vá 1.1.1 thay thế |
-| `1.0.0.rc` | Herdr | release candidate đầu tiên của Herdr, đã được `1.1.1.rc` thay thế |
+| `1.2.0.rc` | [Herdr](https://github.com/herdrdev/herdr) | **nhánh `herdr`, bản này.** Thêm `tech_report.py` (technical report dạng bài báo khoa học khi kết thúc nghiên cứu); `ai-pipeline update` lấy bản mới từ git; sau mỗi round train lưu `data_report.html` / `method_report.html` / `results_report.html`; cổng `require_round_docs`. Chạy thật 2 worker song song trên herdr 0.9.3 + claude (Windows); chưa kiểm macOS và Herdr thật trên Linux. Máy mới: `python scripts/herdr_rt.py verify` rồi `python scripts/agent_roster.py probe <agent>` |
+| `1.2.0` | [Orca](https://github.com/stablyai/orca) | bản stable (nhánh `master`, `main`): cùng tính năng mới nhưng điều phối bằng Orca (`git checkout 1.2.0`) |
+| `1.1.1.rc` / `1.1.1` | Herdr / Orca | bản vá README của 1.1.0; đã được 1.2.0 thay thế |
+| `1.1.0.rc` / `1.1.0` | Herdr / Orca | `ai-pipeline update`, 3 tài liệu round; README chưa cập nhật |
+| `1.0.0.rc` / `1.0.0` | Herdr / Orca | bản đầu: Herdr rc / Orca ổn định cuối |
 | `1.0.0` | Orca | bản Orca trước khi có tính năng mới |
 
-`ai-pipeline update` mặc định chỉ chọn tag **stable** mới nhất (hiện là `1.1.1`, Orca). Muốn ở lại Herdr: `ai-pipeline update --ref 1.1.1.rc` (hoặc `--pre`).
+`ai-pipeline update` mặc định chỉ chọn tag **stable** mới nhất (hiện là `1.2.0`, Orca). Muốn ở lại Herdr: `ai-pipeline update --ref 1.2.0.rc` (hoặc `--pre`).
 
 Khác biệt chính: Herdr không có task DAG/`worker_done`/`ask` nên run, task, worker_done và ask là file trong `runs/<id>/` (`tasks/`, `workers/`, `worker_done/`, `asks/`); mỗi worker chạy trong tab/pane riêng + git worktree riêng; không còn auto-release (dùng `worker-release`).
 
@@ -243,10 +255,10 @@ Yêu cầu: Python ≥ 3.9 và git. Không có phụ thuộc Python nào khác.
 
 ```bash
 # khuyến nghị: pipx (cô lập, có lệnh ai-pipeline toàn cục)
-pipx install git+https://github.com/cuongtran2203/ai-pipeline@1.1.1.rc    # Herdr; @1.1.1 cho bản Orca
+pipx install git+https://github.com/cuongtran2203/ai-pipeline@1.2.0.rc    # Herdr; @1.2.0 cho bản Orca
 
 # hoặc pip
-pip install git+https://github.com/cuongtran2203/ai-pipeline@1.1.1.rc
+pip install git+https://github.com/cuongtran2203/ai-pipeline@1.2.0.rc
 
 # hoặc không cài, chạy thẳng từ bản clone
 git clone https://github.com/cuongtran2203/ai-pipeline && cd ai-pipeline
@@ -347,7 +359,7 @@ skills/                  23 skill: ai-pipeline, -intake, -analysis, -planning, -
 roles/                   prompt role dùng chung cho 2 runtime
 templates/  schemas/     spec, report, playbook, autonomy policy; plan/eval/kg schema
 scripts/                 validate_spec, plan_to_herdr, render_report, project_status, notebook, kg, seal,
-                         autonomy, supervisor, round_docs, ... (chỉ cần Python stdlib)
+                         autonomy, supervisor, round_docs, tech_report, ... (chỉ cần Python stdlib)
 .ai-pipeline.json        manifest (version + hash file đã cài)
 ```
 
@@ -361,7 +373,7 @@ scripts/                 validate_spec, plan_to_herdr, render_report, project_st
 ## Phát triển repo này
 
 ```bash
-python -m unittest discover -s tests     # 540 test, stdlib
+python -m unittest discover -s tests     # 547 test, stdlib
 python scripts/evals.py run --static     # eval cấu hình agent (CI)
 python scripts/sync_skills.py --check    # skills/ là nguồn chuẩn, .claude/ và .agents/ là bản sao
 pip install .                            # build wheel (đóng gói skills/roles/... vào ai_pipeline/payload)
